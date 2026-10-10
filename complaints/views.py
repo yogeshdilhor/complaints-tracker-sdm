@@ -32,7 +32,7 @@ from complaints.models import (
     State,
     Tag,
 )
-from complaints.services import intake
+from complaints.services import intake, llm
 from complaints.services.description_summary import extract_complaint_fields, summarise_report
 from complaints.services.documents import DuplicateDocument, extract, store_document
 from complaints.services.pendency import (
@@ -316,12 +316,15 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
                 extracted_text=extraction.text,
                 text_status=extraction.status,
                 page_count=document.page_count or extraction.pages,
+                is_typed=extraction.typed,
             )
-            document.extracted_text = extraction.text
+            document.extracted_text, document.is_typed = extraction.text, extraction.typed
         if not document.extracted_text.strip():
             error = "No text could be read from this document."
-        elif not settings.OPENAI_API_KEY:
-            error = "Summaries are switched off (no API key is set)."
+        elif document.is_typed is False:
+            error = "This looks handwritten, so it is not summarised. Please read the original."
+        elif not llm.is_configured():
+            error = "Summaries are switched off (no API key is set for the chosen provider)."
         else:
             summary = summarise_report(document.extracted_text, document.get_kind_display())
             if summary:
@@ -358,6 +361,7 @@ def intake_upload(request: HttpRequest) -> HttpResponse:
             "latin_text": extraction.latin_text,
             "text_status": extraction.status,
             "page_count": extraction.pages,
+            "typed": extraction.typed,
         }
         return redirect("complaints:intake_review")
     return render(request, "complaints/intake_upload.html", {"form": form})
@@ -379,7 +383,8 @@ def intake_review(request: HttpRequest) -> HttpResponse:
         form = IntakeForm(request.POST, office=office)
     else:
         # Ask the model once per staged file; a page refresh must not call the API again.
-        if meta.get("ai_for") != meta["sha"]:
+        # Handwritten letters are not sent to the model: it cannot read them reliably.
+        if attachment.typed is not False and meta.get("ai_for") != meta["sha"]:
             village_names = list(
                 Village.objects.filter(office=office, is_active=True).values_list("name", flat=True)
             )
@@ -417,6 +422,7 @@ def intake_review(request: HttpRequest) -> HttpResponse:
             "duplicates": duplicates,
             "filename": attachment.filename,
             "text_status": attachment.text_status,
+            "handwritten": attachment.typed is False,
             "village_hint": guess.village_text if guess.village_id is None else "",
             "document_preview": attachment.extracted_text[:2000],
         },

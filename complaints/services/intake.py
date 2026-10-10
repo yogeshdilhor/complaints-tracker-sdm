@@ -116,6 +116,7 @@ def load_staged(sha: str, meta: dict) -> Attachment | None:
                 extracted_text=meta.get("extracted_text", ""),
                 text_status=meta.get("text_status", "none"),
                 page_count=meta.get("page_count"),
+                typed=meta.get("typed"),
             )
     return None
 

@@ -161,6 +161,7 @@ class Document(models.Model):
     text_status = models.CharField(
         max_length=10, choices=TextStatus.choices, default=TextStatus.NONE
     )
+    is_typed = models.BooleanField(null=True, blank=True)  # False = handwritten; None = unknown
     summary = models.TextField(blank=True)  # derived, like extracted_text; made on first click
     supersedes = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by"

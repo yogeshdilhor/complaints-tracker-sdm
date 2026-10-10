@@ -101,9 +101,17 @@ PAGE_SIZE = 25
 # Intake runs OCR on image-only PDF pages (scans, photos, screenshots), at most this many per file.
 INTAKE_OCR_MAX_PAGES = 6
 
-# Optional: shortens a scanned letter into the description field. Empty key = feature off.
+# Optional AI reading of typed letters and reports. No key for the chosen provider = off.
+# LLM_PROVIDER is "openai" or "sarvam"; change it (and restart) to switch.
+LLM_PROVIDER = env("LLM_PROVIDER", default="openai")
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
-OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4.1-nano")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6-luna")
+OPENAI_REASONING_EFFORT = env("OPENAI_REASONING_EFFORT", default="")  # "" = model default
+SARVAM_API_KEY = env("SARVAM_API_KEY", default="")
+SARVAM_MODEL = env("SARVAM_MODEL", default="sarvam-105b")
+SARVAM_REASONING_EFFORT = env("SARVAM_REASONING_EFFORT", default="off")  # off = no thinking
+# Scanned pages read below this Tesseract confidence (0-100) are treated as handwriting.
+TYPED_MIN_OCR_CONFIDENCE = env.int("TYPED_MIN_OCR_CONFIDENCE", default=70)
 
 LOGGING = {
     "version": 1,

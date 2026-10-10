@@ -49,6 +49,7 @@ class Attachment:
     extracted_text: str = ""
     text_status: str = Document.TextStatus.NONE
     page_count: int | None = None
+    typed: bool | None = None  # False = looks handwritten, so no AI reading; None = not known
 
     @property
     def sha256(self) -> str:
@@ -110,6 +111,7 @@ def store_document(
         page_count=attachment.page_count,
         extracted_text=attachment.extracted_text,
         text_status=attachment.text_status,
+        is_typed=attachment.typed,
         supersedes=supersedes,
         uploaded_by=actor,
     )
@@ -154,8 +156,8 @@ def _ocr(image: Path, lang: str) -> tuple[str, float]:
     return text, mean
 
 
-def _ocr_both(image: Path) -> tuple[str, str]:
-    """(best text, English-only text).
+def _ocr_both(image: Path) -> tuple[str, str, float]:
+    """(best text, English-only text, confidence of the best text 0-100).
 
     Tesseract mixes up scripts when given hin+eng together (Latin junk inside Hindi words,
     broken digits), so each language runs alone and the more confident one is the text.
@@ -163,10 +165,11 @@ def _ocr_both(image: Path) -> tuple[str, str]:
     """
     hindi, hindi_confidence = _ocr(image, HINDI_LANG)
     latin, latin_confidence = _ocr(image, LATIN_LANG)
-    return (hindi if hindi_confidence >= latin_confidence else latin), latin
+    best = hindi if hindi_confidence >= latin_confidence else latin
+    return best, latin, max(hindi_confidence, latin_confidence)
 
 
-def _ocr_pdf_page(source: Path, page: int, workdir: Path) -> tuple[str, str]:
+def _ocr_pdf_page(source: Path, page: int, workdir: Path) -> tuple[str, str, float]:
     prefix = workdir / f"page{page}"
     args = ["pdftoppm", "-r", str(OCR_DPI), "-f", str(page), "-l", str(page), "-singlefile", "-png"]
     _run([*args, str(source), str(prefix)])
@@ -180,6 +183,8 @@ class Extraction:
     pages: int | None = None
     # English-only OCR of the scanned pages; used to read phone numbers, never stored.
     latin_text: str = ""
+    # False when a scanned page was read with low confidence, which means handwriting.
+    typed: bool | None = None
 
 
 def extract(content: bytes, mime_type: str) -> Extraction:
@@ -199,9 +204,11 @@ def extract(content: bytes, mime_type: str) -> Extraction:
             source = Path(tmp) / ("upload.pdf" if is_pdf else "upload.img")
             source.write_bytes(content)
             if not is_pdf:
-                text, latin = (t.strip() for t in _ocr_both(source))
+                text, latin, confidence = _ocr_both(source)
+                text, latin = text.strip(), latin.strip()
                 status = Document.TextStatus.DONE if text else Document.TextStatus.NONE
-                return Extraction(text, status, 1, latin[:LATIN_TEXT_MAX_CHARS])
+                typed = confidence >= settings.TYPED_MIN_OCR_CONFIDENCE if text else None
+                return Extraction(text, status, 1, latin[:LATIN_TEXT_MAX_CHARS], typed)
 
             pages = _run(["pdftotext", "-layout", str(source), "-"]).stdout.split("\f")
             if pages and not pages[-1]:
@@ -209,19 +216,25 @@ def extract(content: bytes, mime_type: str) -> Extraction:
             can_ocr = bool(shutil.which("pdftoppm") and shutil.which("tesseract"))
             budget = settings.INTAKE_OCR_MAX_PAGES
             latin_parts: list[str] = []
+            confidences: list[float] = []
             for number, page_text in enumerate(pages, start=1):
                 if len(page_text.strip()) >= MIN_TEXT_CHARS or not can_ocr or budget <= 0:
                     continue
                 budget -= 1
                 try:
-                    pages[number - 1], latin = _ocr_pdf_page(source, number, Path(tmp))
+                    pages[number - 1], latin, confidence = _ocr_pdf_page(source, number, Path(tmp))
                 except (subprocess.SubprocessError, OSError):
                     continue  # keep what the other pages gave us
                 latin_parts.append(latin.strip())
+                confidences.append(confidence)
             text = "\n".join(p.strip() for p in pages if p.strip())
             status = Document.TextStatus.DONE if text else Document.TextStatus.NONE
             latin_text = "\n".join(latin_parts)[:LATIN_TEXT_MAX_CHARS]
-            return Extraction(text, status, len(pages) or None, latin_text)
+            # Pages with a real text layer are typed; scanned pages must also read clearly.
+            typed = None
+            if text:
+                typed = all(c >= settings.TYPED_MIN_OCR_CONFIDENCE for c in confidences)
+            return Extraction(text, status, len(pages) or None, latin_text, typed)
     except (subprocess.SubprocessError, OSError):
         return Extraction(status=Document.TextStatus.FAILED)
 
