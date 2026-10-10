@@ -12,37 +12,90 @@
   {% if user.is_authenticated %}
   {% with nav_page=request.resolver_match.url_name %}
   <header class="topbar">
-    <a class="brand" href="{% url 'complaints:list' %}"><span class="brand-mark">C</span><span class="brand-text">SDM Complaint Tracker</span></a>
+    <a class="brand" href="{% url 'complaints:list' %}">
+      <span class="brand-mark">{{ user.office.code|default:"SDM"|slice:":3" }}</span>
+      <span class="brand-text"><strong>{{ user.office.name|default:"SDM Complaint Tracker" }}</strong><small>Complaint Tracking &amp; Inter-Departmental Referral System</small></span>
+    </a>
     <nav>
       <a href="{% url 'complaints:list' %}" {% if nav_page == 'list' or nav_page == 'detail' %}class="active"{% endif %}>Complaints</a>
       <a href="{% url 'complaints:overdue' %}" {% if nav_page == 'overdue' %}class="active"{% endif %}>Overdue today</a>
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
-      {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
     </nav>
+    {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
     <form method="post" action="{% url 'logout' %}" class="logout">
       {% csrf_token %}
       <span class="user"><span class="avatar">{{ user.get_full_name|default:user.username|slice:":1" }}</span><span>{{ user.get_full_name|default:user.username }}</span></span>
       <button type="submit" class="outline secondary">Log out</button>
     </form>
   </header>
+  <div id="progress" aria-hidden="true"></div>
   {% endwith %}
   {% endif %}
   <main class="{% block main_class %}page{% endblock %}">
     {% block content %}{% endblock %}
   </main>
   <script>
-    document.body.addEventListener('htmx:afterSwap', function (e) {
-      if (e.detail.target && e.detail.target.id === 'detail-pane') {
-        document.body.classList.add('detail-open');
+    (function () {
+      var wide = function () { return window.matchMedia('(min-width: 960px)').matches; };
+      var selectedHref = null;
+
+      function cards() { return Array.prototype.slice.call(document.querySelectorAll('a.card')); }
+      function mark(card) {
+        cards().forEach(function (c) { c.classList.toggle('selected', c === card); });
       }
-    });
-    document.body.addEventListener('htmx:beforeRequest', function (e) {
-      var el = e.detail.elt;
-      if (el && el.classList && el.classList.contains('card')) {
-        document.querySelectorAll('a.card.selected').forEach(function (c) { c.classList.remove('selected'); });
-        el.classList.add('selected');
+      function openCard(card, focus) {
+        if (!card) { return; }
+        selectedHref = card.getAttribute('href');
+        mark(card);
+        card.click();
+        if (focus) { card.scrollIntoView({ block: 'nearest' }); }
       }
-    });
+      // After the list is (re)loaded keep the same case highlighted, else open the first one.
+      function afterList() {
+        var match = cards().filter(function (c) { return c.getAttribute('href') === selectedHref; })[0];
+        if (match) { mark(match); } else if (wide()) { openCard(cards()[0]); }
+      }
+
+      document.body.addEventListener('htmx:afterSwap', function (e) {
+        var id = e.detail.target && e.detail.target.id;
+        if (id === 'detail-pane') { document.body.classList.add('detail-open'); }
+        if (id === 'list-pane') { afterList(); }
+      });
+      document.body.addEventListener('htmx:beforeRequest', function (e) {
+        var el = e.detail.elt;
+        if (el && el.classList && el.classList.contains('card')) {
+          selectedHref = el.getAttribute('href');
+          mark(el);
+        }
+      });
+      // Thin progress bar while any request is running.
+      var bar = document.getElementById('progress'), busy = 0;
+      document.body.addEventListener('htmx:beforeRequest', function () { busy++; if (bar) { bar.classList.add('on'); } });
+      document.body.addEventListener('htmx:afterRequest', function () { busy = Math.max(0, busy - 1); if (!busy && bar) { bar.classList.remove('on'); } });
+
+      // Stat strip: click a tile to filter the list by that ageing bucket.
+      document.body.addEventListener('click', function (e) {
+        var tile = e.target.closest && e.target.closest('.kpi-item[data-bucket]');
+        if (!tile) { return; }
+        var radio = document.querySelector('input[name=bucket][value="' + tile.dataset.bucket + '"]');
+        if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change', { bubbles: true })); }
+      });
+
+      // Keyboard: "/" search, j / k (or arrows) next and previous case, Esc closes on phones.
+      document.addEventListener('keydown', function (e) {
+        var t = e.target, typing = t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
+        if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+        if (e.key === 'Escape') { document.body.classList.remove('detail-open'); return; }
+        if (typing) { return; }
+        var q = document.getElementById('id_q');
+        if (e.key === '/' && q) { e.preventDefault(); q.focus(); return; }
+        var list = cards(), i = list.findIndex(function (c) { return c.classList.contains('selected'); });
+        if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); openCard(list[Math.min(i + 1, list.length - 1)], true); }
+        if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); openCard(list[Math.max(i - 1, 0)], true); }
+      });
+
+      window.addEventListener('load', function () { if (wide() && document.getElementById('list-pane')) { afterList(); } });
+    })();
   </script>
 </body>
 </html>

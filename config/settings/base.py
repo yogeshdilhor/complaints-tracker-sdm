@@ -93,6 +93,9 @@ ALLOWED_UPLOAD_TYPES = {
 # Ageing buckets by calendar days at the current office; the highest matching threshold wins.
 AGEING_THRESHOLDS = {"safe": 0, "warning": 3, "overdue": 7, "critical": 10}
 
+# Deadline (days) a portal's own norms give for the department's report; shortens the SLA.
+PLATFORM_SLA_DAYS = {"samadhan_shivir": 7}
+
 PAGE_SIZE = 25
 
 # Intake runs OCR on image-only PDF pages (scans, photos, screenshots), at most this many per file.

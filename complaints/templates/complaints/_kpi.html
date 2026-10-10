@@ -1,0 +1,14 @@
+<div id="kpi-strip" class="kpi-strip" {% if oob %}hx-swap-oob="true"{% endif %}>
+  {% for item in kpi_items %}
+  {% if item.bucket %}
+  <button type="button" class="kpi-item kpi-{{ item.tone }}" data-bucket="{{ item.bucket }}"
+          title="Show only: {{ item.label }}">
+    <span class="kpi-label">{{ item.label }}</span><b class="kpi-count">{{ item.count }}</b>
+  </button>
+  {% else %}
+  <div class="kpi-item kpi-{{ item.tone|default:'total' }}">
+    <span class="kpi-label">{{ item.label }}</span><b class="kpi-count">{{ item.count }}</b>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>

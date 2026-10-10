@@ -289,20 +289,33 @@ def test_clerk_cannot_review_but_reviewer_can(login, clerk, reviewer, awaiting, 
     assert awaiting.current_state == State.APPROVED
 
 
-def test_department_officer_can_note_on_own_case_only(login, officer, awaiting, make_complaint):
+def test_department_officer_can_only_upload_a_report_on_own_case(
+    login, officer, awaiting, make_complaint
+):
     other = make_complaint()
-    ok = login(officer).post(action_url(awaiting, "add_note"), {"text": "Inquiry started"}, **HX)
-    assert ok.status_code == 200
-    assert Event.objects.filter(complaint=awaiting, type=EventType.NOTE_ADDED).count() == 1
+    # No note, no other document: reports only.
     assert (
-        login(officer).post(action_url(other, "add_note"), {"text": "x"}, **HX).status_code == 404
-    )
-    assert (
-        login(officer)
-        .post(action_url(awaiting, "issue_notice"), {"department": 1}, **HX)
-        .status_code
+        login(officer).post(action_url(awaiting, "add_note"), {"text": "x"}, **HX).status_code
         == 403
     )
+    assert login(officer).get(action_url(awaiting, "attach_document"), **HX).status_code == 403
+    assert login(officer).get(action_url(other, "record_report"), **HX).status_code == 404
+
+    # The report file is required.
+    form = login(officer).post(action_url(awaiting, "record_report"), {}, **HX)
+    assert form.status_code == 200 and "required" in form.content.decode().lower()
+    awaiting.refresh_from_db()
+    assert awaiting.current_state == State.AWAITING_REPORT
+
+    upload = SimpleUploadedFile("report.pdf", b"%PDF-1.4 officer report", "application/pdf")
+    ok = login(officer).post(action_url(awaiting, "record_report"), {"file": upload}, **HX)
+    assert ok.status_code == 200 and "Report submitted" in ok.content.decode()
+    assert ok["HX-Trigger"] == "complaintChanged"
+    awaiting.refresh_from_db()
+    assert awaiting.current_state == State.UNDER_REVIEW
+    assert awaiting.documents.filter(kind="inquiry_report", uploaded_by=officer).count() == 1
+    # The case has left their unit, so it has disappeared for them entirely.
+    assert login(officer).get(reverse("complaints:detail", args=[awaiting.pk])).status_code == 404
 
 
 def test_unknown_action_is_404(login, clerk, complaint):
@@ -517,6 +530,25 @@ def intake_data(village, **over):
         "description": "",
     }
     return data | over
+
+
+def test_intake_with_a_department_marks_it_and_starts_the_clock(login, clerk, village, tehsildar):
+    client = login(clerk)
+    upload_step(client)
+    client.post(reverse("complaints:intake_review"), intake_data(village, department=tehsildar.pk))
+    complaint = Complaint.objects.get()
+    assert complaint.current_state == State.AWAITING_REPORT
+    assert complaint.current_department == tehsildar
+    assert complaint.referrals.get().to_department == tehsildar
+
+
+def test_intake_new_tag_is_created_once(login, clerk, village):
+    client = login(clerk)
+    upload_step(client)
+    client.post(
+        reverse("complaints:intake_review"), intake_data(village, new_tag="road encroachment")
+    )
+    assert Complaint.objects.get().tags.get().name == "road encroachment"
 
 
 def test_intake_end_to_end_creates_complaint_document_and_event(login, clerk, village):

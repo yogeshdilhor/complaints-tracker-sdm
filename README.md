@@ -61,7 +61,7 @@ Each role is a Django group created by a migration.
 | Role | Can do |
 | --- | --- |
 | Clerk | Register, edit, add notes and files, issue and reissue notices, record reports, submit to the portal, record portal accepted or rejected |
-| DepartmentOfficer | See only complaints currently with their own unit; add notes and files |
+| DepartmentOfficer | See only complaints currently marked to their own unit. The only thing they can do is upload their report (a file is required); once they do, the case leaves their view |
 | Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen |
 | Admin | Everything a Reviewer can, plus master data and users in the Django admin (`/admin/`; the user needs "staff status") |
 | Auditor | Read-only |
@@ -188,7 +188,7 @@ All configuration is through environment variables, read from `.env` if present.
 | `OPENAI_API_KEY` | empty | Optional. When set, intake shortens the scanned letter to a 50-75 word description; when empty the full text is used |
 | `OPENAI_MODEL` | `gpt-4.1-nano` | Model used for that summary |
 
-Values kept in `config/settings/base.py`: `AGEING_THRESHOLDS` (0 safe, 3 warning, 7 overdue, 10 critical days), `PAGE_SIZE` (25), `MAX_UPLOAD_BYTES` (10 MB; PDF, JPG, PNG only), `INTAKE_OCR_MAX_PAGES` (6).
+Values kept in `config/settings/base.py`: `PLATFORM_SLA_DAYS` (a portal's own deadline, e.g. Samadhan Shivir 7 days; it can only shorten a unit's SLA), `AGEING_THRESHOLDS` (0 safe, 3 warning, 7 overdue, 10 critical days), `PAGE_SIZE` (25), `MAX_UPLOAD_BYTES` (10 MB; PDF, JPG, PNG only), `INTAKE_OCR_MAX_PAGES` (6).
 
 PostgreSQL needs the `pg_trgm` extension (name matching). The first migration creates it and the `postgres:16` image includes it.
 

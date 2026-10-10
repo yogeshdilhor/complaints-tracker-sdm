@@ -150,7 +150,7 @@ def _latest_referral(complaint: Complaint) -> Referral | None:
 def _new_referral(ctx: _Ctx, department: Department) -> Referral:
     last = _latest_referral(ctx.complaint)
     due_on = ctx.data.get("due_on") or ctx.today + timedelta(
-        days=sla_days(ctx.complaint.category, department)
+        days=sla_days(ctx.complaint.category, department, ctx.complaint.source_platform)
     )
     return Referral.objects.create(
         office_id=ctx.complaint.office_id,

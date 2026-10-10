@@ -262,6 +262,13 @@ class IntakeForm(forms.Form):
     subject = forms.CharField(max_length=300)
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     tags = forms.ModelMultipleChoiceField(queryset=Tag.objects.none(), required=False)
+    new_tag = forms.CharField(max_length=50, required=False, label="New tag")
+    department = forms.ModelChoiceField(
+        queryset=Department.objects.none(),
+        required=False,
+        label="Marked to (department written on the paper)",
+        empty_label="Not marked yet",
+    )
     related_to = forms.ModelChoiceField(queryset=Complaint.objects.none(), required=False)
     confirm_duplicates = forms.BooleanField(required=False)
 
@@ -270,6 +277,7 @@ class IntakeForm(forms.Form):
         self.fields["village"].queryset = Village.objects.filter(office=office, is_active=True)
         self.fields["category"].queryset = Category.objects.filter(office=office)
         self.fields["tags"].queryset = Tag.objects.filter(office=office)
+        self.fields["department"].queryset = _active_departments(office)
         self.fields["related_to"].queryset = Complaint.objects.filter(office=office)
         self.fields["related_to"].widget = forms.HiddenInput()
         self.fields["confirm_duplicates"].widget = forms.HiddenInput()

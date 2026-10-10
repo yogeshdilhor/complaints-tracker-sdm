@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.db.models import QuerySet
 
-from complaints.models import Complaint
+from complaints.models import Complaint, State
 from complaints.workflow import Action, available_actions
 from core.roles import Role
 
@@ -33,7 +33,6 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
     Action.REOPEN,
 }
 _ADMIN_ACTIONS = _REVIEWER_ACTIONS  # Admin can do everything Reviewer can
-_OFFICER_ACTIONS = {ATTACH_DOCUMENT, ADD_NOTE}
 
 
 def _roles(user) -> set[str]:
@@ -75,8 +74,13 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
     if Role.ADMIN in roles:
         allowed |= _ADMIN_ACTIONS
     if Role.DEPARTMENT_OFFICER in roles and complaint is not None:
-        # visible_complaints() already limited the case to the officer's own department.
-        allowed |= _OFFICER_ACTIONS
+        # An officer can only upload their report, and only while the case is marked to them
+        # and waiting for it. visible_complaints() already limited the case to their unit.
+        if (
+            complaint.current_state == State.AWAITING_REPORT
+            and complaint.current_department_id == user.department_id
+        ):
+            allowed.add(Action.RECORD_REPORT)
     return action in allowed
 
 

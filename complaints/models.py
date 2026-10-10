@@ -23,6 +23,7 @@ class Platform(models.TextChoices):
     JAN_SAMVAD = "jan_samvad", "Jan Samvad"
     SAMADHAN_SHIVIR = "samadhan_shivir", "Samadhan Shivir"
     SOCIAL_MEDIA = "social_media", "Social Media"
+    CPGRAMS = "cpgrams", "CPGRAMS"
     INTERNAL = "internal", "Internal"
 
 

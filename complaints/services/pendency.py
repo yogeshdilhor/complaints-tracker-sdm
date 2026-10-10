@@ -13,11 +13,14 @@ CLOSED_BUCKET = "closed"
 BUCKET_ORDER = ["safe", "warning", "overdue", "critical"]
 
 
-def sla_days(category: Category | None, department: Department) -> int:
-    """Category SLA overrides the department default when set."""
+def sla_days(category: Category | None, department: Department, platform: str = "") -> int:
+    """Category SLA overrides the department default; a portal's own norm can only shorten it."""
     if category is not None and category.sla_days is not None:
-        return category.sla_days
-    return department.default_sla_days
+        days = category.sla_days
+    else:
+        days = department.default_sla_days
+    portal_days = settings.PLATFORM_SLA_DAYS.get(platform)
+    return min(days, portal_days) if portal_days else days
 
 
 def days_at_current_office(complaint: Complaint, today: date | None = None) -> int:

@@ -30,11 +30,13 @@ from complaints.models import (
     PortalSubmission,
     Referral,
     State,
+    Tag,
 )
 from complaints.services import intake
-from complaints.services.description_summary import summarise_description, summarise_report
+from complaints.services.description_summary import extract_complaint_fields, summarise_report
 from complaints.services.documents import DuplicateDocument, extract, store_document
 from complaints.services.pendency import (
+    BUCKET_ORDER,
     ageing_bucket,
     bucket_labels,
     current_location,
@@ -52,6 +54,8 @@ from complaints.workflow import (
     edit_details,
     register_complaint,
 )
+from core.models import Village
+from core.roles import Role
 
 ACTION_LABELS = {
     Action.ISSUE_NOTICE: "Issue notice",
@@ -93,6 +97,19 @@ def _decorate(complaint: Complaint) -> Complaint:
 # --------------------------------------------------------------------- list
 
 
+def _kpi_items(kpi: dict[str, int]) -> list[dict[str, Any]]:
+    """The stat strip, most severe first; the ageing ones filter the list when clicked."""
+    labels = dict(bucket_labels())
+    items = [{"label": "Total cases", "count": kpi["total"], "tone": "", "bucket": None}]
+    items.append({"label": "Pending", "count": kpi["pending"], "tone": "pending", "bucket": None})
+    for bucket in reversed(BUCKET_ORDER):
+        items.append(
+            {"label": labels[bucket], "count": kpi[bucket], "tone": bucket, "bucket": bucket}
+        )
+    items.append({"label": "Closed", "count": kpi["closed"], "tone": "closed", "bucket": "closed"})
+    return items
+
+
 @login_required
 def complaint_list(request: HttpRequest) -> HttpResponse:
     visible = perms.visible_complaints(request.user)
@@ -111,6 +128,8 @@ def complaint_list(request: HttpRequest) -> HttpResponse:
         "form": form,
         "page": page,
         "kpi": kpi_counts(visible),
+        "kpi_items": _kpi_items(kpi_counts(visible)),
+        "oob": _is_htmx(request),
         "querystring": params.urlencode(),
         "buckets": [("", "All"), *bucket_labels()],
         "active_bucket": filters.get("bucket", ""),
@@ -179,6 +198,12 @@ def _form_for(action: str, request: HttpRequest, complaint: Complaint):
     return forms_by_name[action](*data, **kwargs)
 
 
+def _officer_only(user) -> bool:
+    return bool(user.role_names & {Role.DEPARTMENT_OFFICER}) and not (
+        user.role_names & {Role.CLERK, Role.REVIEWER, Role.ADMIN}
+    )
+
+
 def _run_action(action: str, complaint: Complaint, user, form) -> None:
     """Perform the action inside one transaction; raises TransitionError / DuplicateDocument."""
     data = form.cleaned_data
@@ -210,6 +235,11 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         return HttpResponseForbidden("You are not allowed to do this.")
 
     form = _form_for(action, request, complaint)
+    if action == Action.RECORD_REPORT and _officer_only(request.user):
+        # A department officer must attach the report itself; the date is always today.
+        form.fields["file"].required = True
+        form.fields["file"].label = "Your report (PDF/JPG/PNG)"
+        del form.fields["received_on"]
     error = None
     if request.method == "POST" and form.is_valid():
         try:
@@ -221,6 +251,13 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         else:
             if not _is_htmx(request):
                 return redirect("complaints:detail", pk=pk)
+            if not perms.visible_complaints(request.user).filter(pk=pk).exists():
+                # The action handed the case on (an officer's report), so it is no longer theirs.
+                response = render(request, "complaints/_handed_on.html", {"complaint": complaint})
+                response["HX-Trigger"] = "complaintChanged"
+                response["HX-Retarget"] = "#detail-pane"
+                response["HX-Reswap"] = "innerHTML"
+                return response
             complaint = _visible_complaint(request, pk)
             response = render(
                 request, "complaints/_detail.html", _detail_context(request, complaint)
@@ -341,12 +378,16 @@ def intake_review(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         form = IntakeForm(request.POST, office=office)
     else:
-        # Summarise once per staged file; a page refresh must not call the API again.
-        if meta.get("summary_for") != meta["sha"]:
-            meta["description_summary"] = summarise_description(guess.description)
-            meta["summary_for"] = meta["sha"]
-            request.session[INTAKE_SESSION_KEY] = meta
-        guess.description = meta["description_summary"]
+        # Ask the model once per staged file; a page refresh must not call the API again.
+        if meta.get("ai_for") != meta["sha"]:
+            village_names = list(
+                Village.objects.filter(office=office, is_active=True).values_list("name", flat=True)
+            )
+            ai = extract_complaint_fields(attachment.extracted_text, village_names)
+            if ai:
+                meta["ai"], meta["ai_for"] = ai, meta["sha"]
+                request.session[INTAKE_SESSION_KEY] = meta
+        intake.merge_ai_fields(guess, meta.get("ai", {}), office)
         form = IntakeForm(initial=guess.as_initial(), office=office)
 
     duplicates: list = []
@@ -395,7 +436,11 @@ def _save_intake(request: HttpRequest, cd: dict[str, Any], attachment, office) -
                 address=cd["address"],
                 village=cd["village"],
             )
-        return register_complaint(
+        tags = list(cd["tags"])
+        if cd["new_tag"]:
+            tag = Tag.objects.filter(office=office, name__iexact=cd["new_tag"]).first()
+            tags.append(tag or Tag.objects.create(office=office, name=cd["new_tag"]))
+        complaint = register_complaint(
             office=office,
             complainant=complainant,
             actor=request.user,
@@ -406,10 +451,15 @@ def _save_intake(request: HttpRequest, cd: dict[str, Any], attachment, office) -
             external_ref=cd["external_ref"],
             village=cd["village"],
             category=cd["category"],
-            tags=cd["tags"],
+            tags=tags,
             related_to=cd["related_to"],
             attachment=attachment,
         )
+        if cd["department"]:  # marking it starts the department's reply clock
+            apply_transition(
+                complaint, Action.ISSUE_NOTICE, request.user, department=cd["department"]
+            )
+        return complaint
 
 
 # ------------------------------------------------------------------ overdue

@@ -9,7 +9,7 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.postgres.search import TrigramSimilarity
 
-from complaints.models import Complaint
+from complaints.models import Complaint, Tag
 from complaints.services.documents import Attachment, sniff_mime
 from core.models import Office, Village
 
@@ -133,6 +133,8 @@ class Prefill:
     description: str = ""
     village_id: int | None = None
     village_text: str = ""  # village named in the letter but missing from the village list
+    tag_id: int | None = None  # an existing tag the model suggested
+    new_tag: str = ""  # a tag the model suggested that does not exist yet
 
     def as_initial(self) -> dict:
         return {
@@ -143,6 +145,8 @@ class Prefill:
             "subject": self.subject,
             "description": self.description,
             "village": self.village_id,
+            "tags": [self.tag_id] if self.tag_id else [],
+            "new_tag": self.new_tag,
         }
 
 
@@ -306,6 +310,35 @@ def guess_fields(text: str, office: Office, latin_text: str = "") -> Prefill:
         if prefill.village_id is not None:
             prefill.village_text = ""
     return prefill
+
+
+def merge_ai_fields(prefill: Prefill, ai: dict[str, str], office: Office) -> None:
+    """Let what the model read from the letter replace the pattern-based guesses."""
+    if not ai:
+        return
+    if ai.get("summary"):
+        prefill.description = ai["summary"]
+    if ai.get("name"):
+        prefill.name = ai["name"][:200]
+    phone = normalise_phone(ai.get("phone", ""))
+    if len(phone) == 10:
+        prefill.phone = phone
+    if ai.get("address") and not prefill.address:
+        prefill.address = ai["address"][:300]
+    if ai.get("subject") and not prefill.subject:
+        prefill.subject = ai["subject"][:300]
+    if ai.get("village"):
+        wanted = ai["village"].strip().casefold()
+        for village in Village.objects.filter(office=office, is_active=True):
+            if wanted in (village.name.casefold(), village.name_hi.casefold()):
+                prefill.village_id, prefill.village_text = village.pk, ""
+                break
+    if tag_name := ai.get("tag", "").strip()[:50]:
+        existing = Tag.objects.filter(office=office, name__iexact=tag_name).first()
+        if existing:
+            prefill.tag_id = existing.pk
+        else:
+            prefill.new_tag = tag_name
 
 
 # ------------------------------------------------------------- duplicates

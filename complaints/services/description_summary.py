@@ -34,17 +34,18 @@ REPORT_PROMPT = (
 )
 
 
-def _complete(prompt: str) -> str | None:
+def _complete(prompt: str, *, max_tokens: int = MAX_OUTPUT_TOKENS, as_json: bool = False):
     """One chat completion; None when there is no key or the call fails."""
     if not settings.OPENAI_API_KEY:
         return None
-    body = json.dumps(
-        {
-            "model": settings.OPENAI_MODEL,
-            "max_tokens": MAX_OUTPUT_TOKENS,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-    ).encode()
+    payload = {
+        "model": settings.OPENAI_MODEL,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if as_json:
+        payload["response_format"] = {"type": "json_object"}
+    body = json.dumps(payload).encode()
     request = urllib.request.Request(  # noqa: S310 - fixed https URL
         API_URL,
         data=body,
@@ -78,3 +79,43 @@ def summarise_description(text: str) -> str:
 def summarise_report(text: str, kind: str) -> str | None:
     """A 50-75 word summary of a document's text; None if it could not be made."""
     return _complete(REPORT_PROMPT.format(kind=kind, text=text[:REPORT_MAX_CHARS]))
+
+
+FIELDS_MAX_CHARS = 6000
+FIELDS_MAX_TOKENS = 700
+FIELDS_PROMPT = (
+    "You read a complaint letter received by a sub-divisional magistrate's office in Haryana, "
+    "India. The text comes from OCR and may contain mistakes. Reply with one JSON object with "
+    "these keys, using an empty string when the letter does not say:\n"
+    '"summary": 50 to 75 words, in the same language as the letter: the problem, the place, '
+    "key facts and what the person asks for; nothing that is not in the letter\n"
+    '"subject": the complaint title in at most 12 words, same language as the letter\n'
+    '"name": the complainant\'s own name\n'
+    '"phone": the complainant\'s 10-digit mobile number, digits only\n'
+    '"address": the complainant\'s address as written\n'
+    '"village": the village the complaint is about, chosen from this list if it matches, '
+    "otherwise as written: {villages}\n"
+    '"tag": a short 2-4 word label for the kind of complaint, in English, such as '
+    '"village road encroachment" or "pension not paid"\n\nLetter:\n{text}'
+)
+
+
+def extract_complaint_fields(text: str, village_names: list[str]) -> dict[str, str]:
+    """Summary, subject, name, phone, address, village and tag read from a letter by the model.
+
+    Returns {} when there is no key or the call fails; the caller then keeps its own guesses.
+    """
+    raw = _complete(
+        FIELDS_PROMPT.format(villages=", ".join(village_names[:300]), text=text[:FIELDS_MAX_CHARS]),
+        max_tokens=FIELDS_MAX_TOKENS,
+        as_json=True,
+    )
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.warning("Field extraction returned something that is not JSON")
+        return {}
+    keys = ("summary", "subject", "name", "phone", "address", "village", "tag")
+    return {k: str(data.get(k) or "").strip() for k in keys} if isinstance(data, dict) else {}

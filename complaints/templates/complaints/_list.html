@@ -1,27 +1,32 @@
-<div class="kpi">
-  <div><strong>{{ kpi.total }}</strong><span>Total</span></div>
-  <div><strong>{{ kpi.pending }}</strong><span>Pending</span></div>
-  <div class="kpi-safe"><strong>{{ kpi.safe }}</strong><span>Safe</span></div>
-  <div class="kpi-warning"><strong>{{ kpi.warning }}</strong><span>Warning</span></div>
-  <div class="kpi-overdue"><strong>{{ kpi.overdue }}</strong><span>Overdue</span></div>
-  <div class="kpi-critical"><strong>{{ kpi.critical }}</strong><span>Critical</span></div>
-  <div><strong>{{ kpi.closed }}</strong><span>Closed</span></div>
+{% if oob %}{% include "complaints/_kpi.html" %}{% endif %}
+<div class="list-head">
+  <span>Showing <b>{{ page.start_index }}&ndash;{{ page.end_index }}</b> of <b>{{ page.paginator.count }}</b> complaint{{ page.paginator.count|pluralize }}</span>
+  <span class="hint">Click any case to inspect it on the right</span>
 </div>
 
 {% for c in page %}
 <a class="card bucket-{{ c.bucket }}" href="{% url 'complaints:detail' c.pk %}"
    hx-get="{% url 'complaints:detail' c.pk %}" hx-target="#detail-pane" hx-push-url="false">
-  <div class="card-head">
-    <strong>{{ c.ref_no }}</strong>
-    <span class="badge state-{{ c.current_state }}">{{ c.get_current_state_display }}</span>
+  <div class="card-top">
+    <strong class="ref">{{ c.ref_no }}</strong>
+    <span class="tags">
+      {% if c.village %}<span class="tag">&#128205; {{ c.village }}</span>{% endif %}
+      <span class="tag tag-blue">{{ c.get_source_platform_display }}</span>
+      {% if c.is_open %}<span class="tag age age-{{ c.bucket }}">{{ c.days_pending }}d {{ c.bucket|title }}</span>
+      {% else %}<span class="tag age age-closed">Closed</span>{% endif %}
+    </span>
   </div>
   <div class="card-subject">{{ c.subject }}</div>
   <div class="card-meta">
-    {{ c.village|default:"No village" }} &middot; {{ c.get_source_platform_display }} &middot; {{ c.complainant.name }}
+    Citizen: <b>{{ c.complainant.name }}</b> &bull; Received: {{ c.received_on|date:"Y-m-d" }}
+    <span class="badge state-{{ c.current_state }}">{{ c.get_current_state_display }}</span>
   </div>
-  <div class="card-pending">
-    {% if c.is_open %}Pending at {{ c.location }} for {{ c.days_pending }} day{{ c.days_pending|pluralize }}
-    {% else %}Closed {{ c.closed_on|date:"j M Y" }}{% endif %}
+  <div class="card-foot">
+    <span class="where">&#127963; {{ c.location }}</span>
+    <span class="pending pending-{{ c.bucket }}">
+      {% if c.is_open %}Pending at {{ c.location }} for {{ c.days_pending }} day{{ c.days_pending|pluralize:"(s),(s)" }}
+      {% else %}Closed {{ c.closed_on|date:"j M Y" }}{% endif %}
+    </span>
   </div>
 </a>
 {% empty %}

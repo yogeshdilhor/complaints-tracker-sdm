@@ -3,17 +3,19 @@
   <button type="button" class="back outline secondary"
           onclick="document.body.classList.remove('detail-open')">&larr; Back to list</button>
 
-  <header>
-    <h3>{{ complaint.ref_no }}</h3>
+  <header class="case-head">
+    <div class="case-head-top">
+      <h3 class="ref">{{ complaint.ref_no }}</h3>
+      {% if complaint.village %}<span class="tag">&#128205; {{ complaint.village }}</span>{% endif %}
+    </div>
+    <p class="muted small">Registered: {{ complaint.received_on|date:"Y-m-d" }} &bull; Source: <span class="tag tag-blue">{{ complaint.get_source_platform_display }}</span></p>
     <p class="subject">{{ complaint.subject }}</p>
+    <p class="small">Complainant: <b>{{ complaint.complainant.name }}</b>
+      {% if complaint.complainant.phone %}&bull; <a href="tel:{{ complaint.complainant.phone }}">{{ complaint.complainant.phone }}</a>{% endif %}
+      {% if complaint.village %}&bull; Village: <b>{{ complaint.village }}</b>{% endif %}</p>
     <dl class="facts">
-      <dt>Complainant</dt><dd>{{ complaint.complainant.name }}</dd>
-      <dt>Phone</dt><dd>{{ complaint.complainant.phone|default:"-" }}</dd>
-      <dt>Village</dt><dd>{{ complaint.village|default:"-" }}</dd>
-      <dt>Platform</dt><dd>{{ complaint.get_source_platform_display }}</dd>
-      <dt>External ref</dt><dd>{{ complaint.external_ref|default:"-" }}</dd>
-      <dt>Category</dt><dd>{{ complaint.category|default:"-" }}</dd>
-      <dt>Received</dt><dd>{{ complaint.received_on|date:"j M Y" }}</dd>
+      {% if complaint.external_ref %}<dt>External ref</dt><dd>{{ complaint.external_ref }}</dd>{% endif %}
+      {% if complaint.category %}<dt>Category</dt><dd>{{ complaint.category }}</dd>{% endif %}
       {% if complaint.related_to %}
       <dt>Related to</dt>
       <dd><a href="{% url 'complaints:detail' complaint.related_to_id %}">{{ complaint.related_to.ref_no }}</a></dd>
@@ -21,20 +23,33 @@
     </dl>
   </header>
 
-  <section class="status status-{{ complaint.bucket }}">
-    <div class="status-head">
-      <span class="badge state-{{ complaint.current_state }}">{{ complaint.get_current_state_display }}</span>
-      {% if complaint.is_open %}
-      <span>Pending at {{ complaint.location }} for {{ complaint.days_pending }} day{{ complaint.days_pending|pluralize }}</span>
-      {% endif %}
-      <span>Total age {{ total_age }} day{{ total_age|pluralize }}</span>
+  <h4 class="section-title">Current status &amp; custody</h4>
+  <section class="custody custody-{{ complaint.bucket }}">
+    <div class="custody-main">
+      <div>
+        <small class="eyebrow">Current custodian</small>
+        <strong class="custodian">{{ complaint.location }}</strong>
+        {% if complaint.is_open %}<small class="muted">Since {{ complaint.current_stage_started_at|date:"Y-m-d" }}</small>{% endif %}
+      </div>
+      <div class="custody-age">
+        {% if complaint.is_open %}
+        <strong>{{ complaint.days_pending }} Day{{ complaint.days_pending|pluralize }} Pending{% if complaint.bucket == "critical" %} (Critical){% elif complaint.bucket == "overdue" %} (Overdue){% elif complaint.bucket == "warning" %} (Warning){% endif %}</strong>
+        {% else %}
+        <strong>Closed {{ complaint.closed_on|date:"j M Y" }}</strong>
+        {% endif %}
+        <small>Status: <span class="badge state-{{ complaint.current_state }}">{{ complaint.get_current_state_display }}</span></small>
+        <small class="muted">Total age {{ total_age }} day{{ total_age|pluralize }}</small>
+      </div>
     </div>
+    {% if open_referral %}
+    <p class="marked"><b>Marked to {{ open_referral.to_department }}</b> on {{ open_referral.issued_on|date:"j M Y" }} &middot; <b>pending reply from {{ open_referral.to_department }}</b></p>
+    {% endif %}
     {% if referral_overdue %}
     <p class="error">Report overdue: due {{ open_referral.due_on|date:"j M Y" }}.</p>
     {% elif open_referral %}
-    <p>Report due {{ open_referral.due_on|date:"j M Y" }}.</p>
+    <p class="small">Reply due {{ open_referral.due_on|date:"j M Y" }}.</p>
     {% endif %}
-    <p class="summary">{{ summary }}</p>
+    <p class="summary small">{{ summary }}</p>
   </section>
 
   {% if actions %}
@@ -47,45 +62,47 @@
   {% endif %}
   <section id="action-area"></section>
 
-  {% if complaint.description %}
-  <section>
-    <h4>Description</h4>
-    <p class="description">{{ complaint.description|linebreaksbr }}</p>
+  <h4 class="section-title">Brief summary <span>(50&ndash;75 words)</span></h4>
+  <section class="brief">
+    {% if complaint.description %}{{ complaint.description|linebreaksbr }}{% else %}<span class="muted">No description recorded.</span>{% endif %}
   </section>
-  {% endif %}
 
+  <h4 class="section-title">Case documents &amp; attachments</h4>
   <section>
-    <h4>Documents</h4>
     {% for kind, docs in documents %}
-    <h5>{{ kind }}</h5>
-    <ul class="docs">
-      {% for d in docs %}
-      <li>
-        <a href="{% url 'complaints:document' d.pk %}" target="_blank" rel="noopener">{{ d.original_filename }}</a>
-        <a href="{% url 'complaints:document' d.pk %}?download=1" class="secondary">download</a>
-        <a href="#" class="secondary" hx-post="{% url 'complaints:document_summary' d.pk %}"
-           hx-target="#doc-summary-{{ d.pk }}" hx-swap="innerHTML"
-           hx-indicator="#doc-summary-{{ d.pk }}"
-           onclick="this.closest('li').querySelector('.doc-summary-box').innerHTML='<small class=muted>Reading the document and summarising&hellip; this can take up to 30 seconds.</small>';return false;">summary</a>
-        <small>{{ d.uploaded_at|local_dt }}</small>
-        {% if d.supersedes %}<small>(replaces {{ d.supersedes.original_filename }})</small>{% endif %}
-        {% if d.superseded_by.all %}<small class="muted">(superseded)</small>{% endif %}
-        <div class="doc-summary-box" id="doc-summary-{{ d.pk }}"></div>
-      </li>
-      {% endfor %}
-    </ul>
+    {% for d in docs %}
+    <div class="doc">
+      <div class="doc-row">
+        <span class="doc-icon" aria-hidden="true">&#128196;</span>
+        <div class="doc-name">
+          <b>{{ d.original_filename }}</b>
+          <small class="muted"><span class="tag">{{ kind }}</span> {{ d.uploaded_at|local_dt }}
+            {% if d.supersedes %}&bull; replaces {{ d.supersedes.original_filename }}{% endif %}
+            {% if d.superseded_by.all %}&bull; superseded{% endif %}</small>
+        </div>
+        <div class="doc-links">
+          <a href="#" hx-post="{% url 'complaints:document_summary' d.pk %}"
+             hx-target="#doc-summary-{{ d.pk }}" hx-swap="innerHTML"
+             onclick="this.closest('.doc').querySelector('.doc-summary-box').innerHTML='<small class=muted>Reading the document and summarising&hellip; this can take up to 30 seconds.</small>';return false;">Summary</a>
+          <a href="{% url 'complaints:document' d.pk %}" target="_blank" rel="noopener">Open &#8599;</a>
+          <a href="{% url 'complaints:document' d.pk %}?download=1">Download</a>
+        </div>
+      </div>
+      <div class="doc-summary-box" id="doc-summary-{{ d.pk }}"></div>
+    </div>
+    {% endfor %}
     {% empty %}
     <p class="empty">No documents yet.</p>
     {% endfor %}
   </section>
 
+  <h4 class="section-title">History</h4>
   <section>
-    <h4>History</h4>
     <ol class="timeline">
       {% for e in events %}
       <li>
-        <div><strong>{{ e|event_label }}</strong> <small>{{ e.occurred_at|local_dt }} by {{ e.actor.get_full_name|default:e.actor.username }}</small></div>
-        {% with detail=e|event_detail %}{% if detail %}<div class="muted">{{ detail }}</div>{% endif %}{% endwith %}
+        <div><strong>{{ e|event_label }}</strong> <small class="muted">{{ e.occurred_at|local_dt }} by {{ e.actor.get_full_name|default:e.actor.username }}</small></div>
+        {% with detail=e|event_detail %}{% if detail %}<div class="muted small">{{ detail }}</div>{% endif %}{% endwith %}
       </li>
       {% endfor %}
     </ol>

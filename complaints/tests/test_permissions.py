@@ -103,11 +103,16 @@ def test_permission_matrix(request, role, allowed, complaint):
         assert perms.can(user, action, complaint) == (action in allowed), f"{role}: {action}"
 
 
-def test_officer_can_only_attach_and_note_on_their_own_cases(officer, with_tehsildar, with_bdpo):
+def test_officer_can_only_add_a_report_on_a_case_marked_to_them(officer, with_tehsildar, with_bdpo):
     for action in [*STATE_ACTIONS, *NON_STATE]:
-        expected = action in {perms.ATTACH_DOCUMENT, perms.ADD_NOTE}
+        expected = action == Action.RECORD_REPORT
         assert perms.can(officer, action, with_tehsildar) == expected, action
         assert not perms.can(officer, action, with_bdpo), action
+
+
+def test_officer_cannot_add_a_report_once_the_case_has_moved_on(officer, clerk, with_tehsildar):
+    apply_transition(with_tehsildar, Action.RECORD_REPORT, clerk)
+    assert not perms.can(officer, Action.RECORD_REPORT, with_tehsildar)
 
 
 def test_auditor_is_read_only_even_for_state_changes(auditor, complaint):
