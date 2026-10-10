@@ -35,6 +35,16 @@ Size it is built for: about 100 complaints a week, one office, 10-20 users. It i
 - An Overdue page: late inquiry reports by unit, portal rejections waiting, and cases sitting in the office too long.
 - Keep uploaded files immutable and serve them only to users who may see the complaint.
 
+### Working in the app
+
+- **Timeline.** A case is one timeline. `+ Add stage` holds every action, plus *Custom stage* (your own title, a note and any number of documents). Click a stage to see its documents and their summaries.
+- **Upload a document.** The first item in `+ Add stage`. The document is read automatically (typed documents only; handwriting is not sent to the AI) and proposed as a stage with a title, officer, date, acknowledgement number and a 50-75 word summary. You check and edit it, then save; nothing is logged before that.
+- **Dashboard.** Office-wide analytics: weekly intake, status, departments, portals, ageing, department turnaround, ATR outcomes, villages, categories and tags. Charts are drawn by Chart.js (vendored in `static/vendor`, no CDN).
+- **Table download.** An Excel workbook (Complaints, Reports, Timeline, Documents sheets), filterable by department, portal and status. Written by `complaints/services/xlsx.py`, no extra package.
+- **Resizable panes.** Drag the divider between the list and the case; the width is remembered in the browser (double-click to reset).
+
+Dashboard and Table download are for Clerk, Reviewer, Admin and Auditor; department officers see neither.
+
 ### States and actions
 
 `RECEIVED -> AWAITING_REPORT -> UNDER_REVIEW -> APPROVED -> PORTAL_SUBMITTED -> CLOSED`

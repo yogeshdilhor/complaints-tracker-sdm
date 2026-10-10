@@ -25,6 +25,10 @@
     <details class="add-menu">
       <summary class="add-btn" title="Add a stage to the timeline"><span aria-hidden="true">+</span> Add stage</summary>
       <ul>
+        {% if can_auto_stage %}
+        <li class="menu-first"><button type="button" hx-get="{% url 'complaints:stage_from_document' complaint.pk %}" hx-target="#action-area"
+                    onclick="this.closest('details').open=false"><b>Upload a document</b><small>Read it automatically and fill in the stage</small></button></li>
+        {% endif %}
         {% for name, label in actions %}
         <li><button type="button" hx-get="{% url 'complaints:action' complaint.pk name %}" hx-target="#action-area"
                     onclick="this.closest('details').open=false">{{ label }}</button></li>

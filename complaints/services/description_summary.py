@@ -84,3 +84,65 @@ def extract_complaint_fields(text: str, village_names: list[str]) -> dict[str, s
         return {}
     keys = ("summary", "subject", "name", "phone", "address", "village", "tag")
     return {k: str(data.get(k) or "").strip() for k in keys} if isinstance(data, dict) else {}
+
+
+STAGE_MAX_CHARS = 12000
+STAGE_MAX_TOKENS = 800
+STAGE_OPTIONS = {
+    "issue_notice": "a notice or letter marking the complaint to an officer for a report",
+    "reissue_notice": "a reminder, or a repeat notice asking an officer for the report again",
+    "record_report": "a report received from the officer or department",
+    "review_satisfied": "the SDM accepting the report",
+    "review_not_satisfied": "the SDM finding the report inadequate and asking again",
+    "submit_to_portal": "an action taken report (ATR) uploaded on the portal",
+    "portal_accepted": "the portal closing or accepting the complaint",
+    "portal_rejected": "the portal sending the complaint back or re-opening it",
+    "close_without_portal": "the complaint being resolved and filed",
+    "reopen": "the complaint being re-opened",
+    "add_stage": "anything else",
+}
+STAGE_PROMPT = (
+    "A new document has just been added to a complaint file at an SDM office in Haryana, India. "
+    "The text comes from OCR and may contain mistakes.\n"
+    'Complaint: "{subject}". Current stage: {state}. Currently with: {department}. '
+    "Portal the complaint came from: {portal}.\n"
+    "Decide what this document is. Options:\n{options}\n"
+    "Reply with one JSON object, using an empty string for anything the document does not say:\n"
+    '"action": exactly one option key above\n'
+    '"headline": a title for this stage in at most 12 words, same language as the document\n'
+    '"officer": the officer or office that wrote the document, as written\n'
+    '"date": the date of the document as YYYY-MM-DD\n'
+    '"summary": 50 to 75 words, same language as the document: what happened, who did it and '
+    "the outcome or recommendation; nothing that is not in the document\n"
+    '"ack_no": a portal acknowledgement or reference number\n'
+    '"reason": the reason, if the document sends the complaint back or re-opens it\n'
+    '"note": one short sentence of anything else worth recording\n\nDocument:\n{text}'
+)
+
+
+def read_document_as_stage(
+    text: str, context: dict[str, str], allowed: list[str]
+) -> dict[str, str]:
+    """What a newly uploaded document says, as a proposed stage; {} if the model is unavailable.
+
+    `allowed` are the action keys that make sense now; the model must pick one of them.
+    """
+    options = "\n".join(f"- {key}: {STAGE_OPTIONS[key]}" for key in allowed if key in STAGE_OPTIONS)
+    raw = _complete(
+        STAGE_PROMPT.format(options=options, text=text[:STAGE_MAX_CHARS], **context),
+        max_tokens=STAGE_MAX_TOKENS,
+        as_json=True,
+    )
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keys = ("action", "headline", "officer", "date", "summary", "ack_no", "reason", "note")
+    result = {k: str(data.get(k) or "").strip() for k in keys}
+    if result["action"] not in allowed:
+        result["action"] = "add_stage"
+    return result

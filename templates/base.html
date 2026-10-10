@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
   <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
   <script src="{% static 'js/wheel.js' %}" defer></script>
+  <script src="{% static 'js/splitter.js' %}" defer></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
   {% if user.is_authenticated %}
@@ -18,8 +19,9 @@
       <span class="brand-text"><strong>{{ user.office.name|default:"SDM Complaint Tracker" }}</strong><small>Complaint Tracking &amp; Inter-Departmental Referral System</small></span>
     </a>
     <nav>
-      <a href="{% url 'complaints:list' %}" {% if nav_page == 'list' or nav_page == 'detail' %}class="active"{% endif %}>Complaints</a>
+      {% if can_analyse %}<a href="{% url 'complaints:dashboard' %}" {% if nav_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>{% endif %}
       <a href="{% url 'complaints:overdue' %}" {% if nav_page == 'overdue' %}class="active"{% endif %}>Overdue today</a>
+      {% if can_analyse %}<a href="{% url 'complaints:export' %}" {% if nav_page == 'export' %}class="active"{% endif %}>Table download</a>{% endif %}
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
     </nav>
     {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}

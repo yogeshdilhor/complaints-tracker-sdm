@@ -1,0 +1,17 @@
+<form class="action-form" method="post" enctype="multipart/form-data"
+      action="{% url 'complaints:stage_from_document' complaint.pk %}"
+      hx-post="{% url 'complaints:stage_from_document' complaint.pk %}" hx-encoding="multipart/form-data"
+      hx-target="#action-area" hx-swap="innerHTML" hx-indicator="#read-note">
+  {% csrf_token %}
+  <h4>Upload a new document</h4>
+  <p class="muted small">The document is read automatically and the stage is filled in for you. You check it before anything is saved.</p>
+  {% if form.errors %}<p class="error" role="alert">{{ form.errors.file|join:" " }}</p>{% endif %}
+  <label>Document (PDF, JPG or PNG)
+    <input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required>
+  </label>
+  <p id="read-note" class="muted small htmx-indicator">Reading the document&hellip; this can take up to 30 seconds.</p>
+  <div class="form-buttons">
+    <button type="submit">Read document</button>
+    <button type="button" class="secondary outline" onclick="document.getElementById('action-area').innerHTML=''">Cancel</button>
+  </div>
+</form>

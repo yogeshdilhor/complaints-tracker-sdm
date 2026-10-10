@@ -9,5 +9,6 @@ def nav(request):
         return {}
     return {
         "can_register": permissions.can(user, permissions.REGISTER),
+        "can_analyse": permissions.can_analyse(user),
         "admin_index_url": reverse("admin:index") if user.is_staff else "",
     }

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Table download - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<article class="narrow export">
+  <h2>Table download</h2>
+  <p class="muted">An Excel workbook with four sheets: <b>Complaints</b> (complainant details and the complaint summary),
+    <b>Reports</b> (each report asked for, how long it took, and its summary), <b>Timeline</b> (every stage with its date)
+    and <b>Documents</b> (every file with its summary).</p>
+  <form method="get" action="{% url 'complaints:export' %}" class="export-form">
+    <div class="export-grid">
+      <label>{{ form.department.label }} {{ form.department }}</label>
+      <label>{{ form.platform.label }} {{ form.platform }}</label>
+      <label>Status {{ form.status }}</label>
+    </div>
+    <p class="count"><b>{{ count }}</b> complaint{{ count|pluralize }} match{{ count|pluralize:"es," }}</p>
+    <div class="form-buttons">
+      <button type="submit" class="secondary outline">Update count</button>
+      <a role="button" href="{% url 'complaints:export_download' %}?{{ querystring }}">Download Excel table</a>
+    </div>
+  </form>
+  <p class="muted small">Report and document summaries appear once they have been made, either when a document was uploaded
+    through "Upload a document" or by clicking <i>Summarise</i> on it in the timeline.</p>
+</article>
+{% endblock %}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from django.conf import settings
@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import OuterRef, Subquery
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
@@ -20,6 +21,7 @@ from complaints.forms import (
     AttachDocumentForm,
     ComplaintFilterForm,
     EditDetailsForm,
+    ExportForm,
     IntakeForm,
     IntakeUploadForm,
     NoteForm,
@@ -34,8 +36,14 @@ from complaints.models import (
     Tag,
 )
 from complaints.services import intake, llm
-from complaints.services.description_summary import extract_complaint_fields, summarise_report
+from complaints.services.analytics import build_dashboard
+from complaints.services.description_summary import (
+    extract_complaint_fields,
+    read_document_as_stage,
+    summarise_report,
+)
 from complaints.services.documents import DuplicateDocument, extract, store_document
+from complaints.services.export import build_workbook, export_queryset
 from complaints.services.pendency import (
     BUCKET_ORDER,
     ageing_bucket,
@@ -46,7 +54,7 @@ from complaints.services.pendency import (
 )
 from complaints.services.search import filter_complaints, kpi_counts, paginate
 from complaints.services.summary import build_summary
-from complaints.services.timeline import build_timeline
+from complaints.services.timeline import build_timeline, portal_name
 from complaints.workflow import (
     Action,
     TransitionError,
@@ -57,7 +65,7 @@ from complaints.workflow import (
     edit_details,
     register_complaint,
 )
-from core.models import Village
+from core.models import Department, Village
 from core.roles import Role
 
 ACTION_LABELS = {
@@ -173,6 +181,7 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
         "summary": build_summary(complaint),
         "timeline": build_timeline(complaint),
         "actions": actions,
+        "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
         "total_age": total_age_days(complaint),
         "open_referral": open_referral,
         "referral_overdue": bool(open_referral and open_referral.due_on < timezone.localdate()),
@@ -192,9 +201,18 @@ def complaint_detail(request: HttpRequest, pk: int) -> HttpResponse:
 # ------------------------------------------------------------------ actions
 
 
-def _form_for(action: str, request: HttpRequest, complaint: Complaint):
-    kwargs = {"complaint": complaint}
-    data = (request.POST, request.FILES) if request.method == "POST" else ()
+def _form_for(
+    action: str,
+    request: HttpRequest,
+    complaint: Complaint,
+    *,
+    initial: dict | None = None,
+    unbound: bool = False,
+):
+    kwargs: dict[str, Any] = {"complaint": complaint}
+    if initial:
+        kwargs["initial"] = initial
+    data = (request.POST, request.FILES) if request.method == "POST" and not unbound else ()
     if action in ACTION_FORMS:
         return ACTION_FORMS[action](*data, **kwargs)
     forms_by_name = {
@@ -212,20 +230,35 @@ def _officer_only(user) -> bool:
     )
 
 
-def _run_action(action: str, complaint: Complaint, user, form) -> None:
-    """Perform the action inside one transaction; raises TransitionError / DuplicateDocument."""
+def _run_action(
+    action: str, complaint: Complaint, user, form, *, staged=None, doc_summary: str = ""
+) -> None:
+    """Perform the action inside one transaction; raises TransitionError / DuplicateDocument.
+
+    `staged` is a document already uploaded and read in the "upload a document" flow; it
+    becomes part of this stage, with `doc_summary` (as confirmed by the user) kept on it.
+    """
     data = form.cleaned_data
     with transaction.atomic():
+        staged_doc = None
         if action in ACTION_FORMS:
             payload = form.transition_data()
             if form.attachment is not None:
                 payload[form.file_key] = store_document(
                     complaint, form.attachment, form.file_kind, user
                 )
-            payload["extra_documents"] = [
+            extras = [
                 store_document(complaint, a, Document.Kind.OTHER, user)
                 for a in form.extra_attachments
             ]
+            if staged is not None:
+                if form.file_key and form.file_key not in payload:
+                    staged_doc = store_document(complaint, staged, form.file_kind, user)
+                    payload[form.file_key] = staged_doc
+                else:
+                    staged_doc = store_document(complaint, staged, Document.Kind.OTHER, user)
+                    extras.append(staged_doc)
+            payload["extra_documents"] = extras
             apply_transition(complaint, action, user, **payload)
         elif action == perms.ATTACH_DOCUMENT:
             attach_document(
@@ -240,11 +273,16 @@ def _run_action(action: str, complaint: Complaint, user, form) -> None:
             documents = [
                 store_document(complaint, a, Document.Kind.OTHER, user) for a in data["files"]
             ]
+            if staged is not None:
+                staged_doc = store_document(complaint, staged, Document.Kind.OTHER, user)
+                documents.append(staged_doc)
             add_stage(complaint, user, data["headline"], data["note"], documents)
         elif action == perms.ADD_NOTE:
             add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:
             edit_details(complaint, user, **data)
+        if staged_doc is not None and doc_summary:
+            Document.objects.filter(pk=staged_doc.pk).update(summary=doc_summary[:2000])
 
 
 @login_required
@@ -256,16 +294,32 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
     if not perms.can(request.user, action, complaint):
         return HttpResponseForbidden("You are not allowed to do this.")
 
+    staged = None
+    if request.method == "POST" and request.POST.get("staged"):
+        staged = _staged_attachment(request, complaint, request.POST["staged"])
     form = _form_for(action, request, complaint)
+    if request.POST.get("staged"):
+        form.fields.pop("file", None)  # the document was already uploaded
     if action == Action.RECORD_REPORT and _officer_only(request.user):
         # A department officer must attach the report itself; the date is always today.
         form.fields["file"].required = True
         form.fields["file"].label = "Your report (PDF/JPG/PNG)"
         del form.fields["received_on"]
     error = None
-    if request.method == "POST" and form.is_valid():
+    if request.method == "POST" and request.POST.get("staged") and staged is None:
+        error = "The uploaded document has expired. Please upload it again."
+    elif request.method == "POST" and form.is_valid():
         try:
-            _run_action(action, complaint, request.user, form)
+            _run_action(
+                action,
+                complaint,
+                request.user,
+                form,
+                staged=staged,
+                doc_summary=request.POST.get("doc_summary", "").strip(),
+            )
+            if staged is not None:
+                request.session.pop(STAGE_SESSION_KEY, None)
         except DuplicateDocument as exc:
             error = f"{exc} ({exc.existing.original_filename})"
         except TransitionError as exc:
@@ -289,18 +343,245 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
             response["HX-Reswap"] = "innerHTML"
             return response
 
+    context = {
+        "complaint": complaint,
+        "form": form,
+        "action": action,
+        "label": ACTION_LABELS[action],
+        "error": error,
+        "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
+    }
+    if request.POST.get("staged"):
+        context |= _staged_context(
+            request, complaint, action, request.POST["staged"], request.POST.get("doc_summary", "")
+        )
+    return render(request, "complaints/_action_form.html", context)
+
+
+# -------------------------------------------- stage from an uploaded document
+
+STAGE_SESSION_KEY = "stage_doc"
+
+
+def _staged_attachment(request: HttpRequest, complaint: Complaint, sha: str):
+    meta = request.session.get(STAGE_SESSION_KEY)
+    if not meta or meta.get("pk") != complaint.pk or meta.get("sha") != sha:
+        return None
+    return intake.load_staged(sha, meta)
+
+
+def _stage_type_choices(user, complaint: Complaint) -> list[tuple[str, str]]:
+    allowed = perms.allowed_actions(user, complaint)
+    return [(a, MENU_LABELS[a]) for a in allowed] + [
+        (perms.ADD_STAGE, MENU_LABELS[perms.ADD_STAGE])
+    ]
+
+
+def _staged_context(request, complaint, action, sha, doc_summary) -> dict[str, Any]:
+    meta = request.session.get(STAGE_SESSION_KEY) or {}
+    return {
+        "staged": {"sha": sha, "filename": meta.get("filename", ""), "typed": meta.get("typed")},
+        "doc_summary": doc_summary,
+        "stage_types": _stage_type_choices(request.user, complaint),
+        "stage_type": action,
+        "stage_url": reverse("complaints:stage_from_document", args=[complaint.pk]),
+    }
+
+
+def _match_department(name: str, office) -> Department | None:
+    """The office's department an officer's title refers to ('BDPO Dabwali' -> BDPO)."""
+    wanted = name.strip().casefold()
+    if not wanted:
+        return None
+    best = None
+    for dept in Department.objects.filter(office=office, is_active=True):
+        for label in {dept.name.casefold(), dept.short_name.casefold()} - {""}:
+            if label == wanted or label in wanted:
+                if best is None or len(label) > best[0]:
+                    best = (len(label), dept)
+    return best[1] if best else None
+
+
+def _read_date(value: str) -> date | None:
+    try:
+        parsed = date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed <= timezone.localdate() else None
+
+
+def _stage_initial(action: str, ai: dict[str, str], office) -> dict[str, Any]:
+    """Pre-fill the confirmation form from what the model read."""
+    initial: dict[str, Any] = {}
+    if ai.get("headline"):
+        initial["headline"] = ai["headline"]
+    when = _read_date(ai.get("date", ""))
+    department = _match_department(ai.get("officer", ""), office)
+    note, reason = ai.get("note", ""), ai.get("reason", "")
+    if action in (Action.ISSUE_NOTICE, Action.REISSUE_NOTICE):
+        initial |= {"department": department.pk} if department else {}
+        initial["remarks"] = note
+    elif action == Action.REVIEW_NOT_SATISFIED:
+        initial |= {"department": department.pk} if department else {}
+        initial["note"] = reason or note
+    elif action == Action.RECORD_REPORT and when:
+        initial["received_on"] = when
+    elif action == Action.REVIEW_SATISFIED:
+        initial["note"] = note
+    elif action == Action.SUBMIT_TO_PORTAL:
+        initial |= {"submitted_on": when} if when else {}
+        initial["portal_ack_no"] = ai.get("ack_no", "")
+    elif action == Action.PORTAL_ACCEPTED:
+        initial["portal_ack_no"] = ai.get("ack_no", "")
+    elif action == Action.PORTAL_REJECTED:
+        initial |= {"department": department.pk} if department else {}
+        initial |= {"reason": reason or note, "next_step": "review_again"}
+    elif action in (Action.CLOSE_WITHOUT_PORTAL, Action.REOPEN):
+        initial["reason"] = reason or note
+    elif action == perms.ADD_STAGE:
+        initial["note"] = note
+    return initial
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
+    """Upload a new document, let the model read it, and confirm the stage before it is logged."""
+    complaint = _visible_complaint(request, pk)
+    if not perms.can(request.user, perms.ADD_STAGE, complaint):
+        return HttpResponseForbidden("You are not allowed to do this.")
+    _decorate(complaint)
+    upload_page = {"complaint": complaint}
+    types = _stage_type_choices(request.user, complaint)
+    valid = {key for key, _ in types}
+    meta = request.session.get(STAGE_SESSION_KEY)
+
+    if request.method == "POST":
+        form = IntakeUploadForm(request.POST, request.FILES)
+        if not form.is_valid():
+            return render(request, "complaints/_stage_upload.html", upload_page | {"form": form})
+        attachment = form.cleaned_data["file"]
+        extraction = extract(attachment.content, attachment.mime_type)
+        suggestion: dict[str, str] = {}
+        if extraction.text and extraction.typed is not False and llm.is_configured():
+            current = complaint.current_department
+            suggestion = read_document_as_stage(
+                extraction.text,
+                {
+                    "subject": complaint.subject,
+                    "state": complaint.get_current_state_display(),
+                    "department": str(current) if current else "the SDM office",
+                    "portal": portal_name(complaint),
+                },
+                [key for key, _ in types],
+            )
+        meta = {
+            "pk": complaint.pk,
+            "sha": intake.stage_upload(attachment),
+            "filename": attachment.filename,
+            "extracted_text": extraction.text,
+            "text_status": extraction.status,
+            "page_count": extraction.pages,
+            "typed": extraction.typed,
+            "suggestion": suggestion,
+        }
+        request.session[STAGE_SESSION_KEY] = meta
+        chosen = suggestion.get("action") or perms.ADD_STAGE
+    else:
+        chosen = request.GET.get("type", "")
+        if not meta or meta.get("pk") != complaint.pk or not chosen:
+            return render(request, "complaints/_stage_upload.html", upload_page)
+        if chosen not in valid:
+            chosen = perms.ADD_STAGE
+
+    if chosen not in valid:
+        chosen = perms.ADD_STAGE
+    ai = meta.get("suggestion") or {}
+    form = _form_for(
+        chosen,
+        request,
+        complaint,
+        initial=_stage_initial(chosen, ai, complaint.office),
+        unbound=True,
+    )
+    form.fields.pop("file", None)
+    context = {
+        "complaint": complaint,
+        "form": form,
+        "action": chosen,
+        "label": "Check what was read",
+        "error": None,
+        "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
+        "unread": meta.get("typed") is False or not meta.get("extracted_text"),
+        "ai_used": bool(ai),
+    } | _staged_context(request, complaint, chosen, meta["sha"], ai.get("summary", ""))
+    return render(request, "complaints/_action_form.html", context)
+
+
+# ----------------------------------------------------- dashboard and downloads
+
+
+@login_required
+def dashboard(request: HttpRequest) -> HttpResponse:
+    if not perms.can_analyse(request.user):
+        return HttpResponseForbidden("The dashboard covers the whole office.")
+    data = build_dashboard(perms.visible_complaints(request.user), request.GET.get("range", "90"))
+    chart_keys = (
+        "weekly", "by_state", "by_platform", "by_department", "by_village",
+        "by_category", "by_tag", "ageing", "dept_speed", "atr",
+    )  # fmt: skip
     return render(
         request,
-        "complaints/_action_form.html",
+        "complaints/dashboard.html",
         {
-            "complaint": complaint,
-            "form": form,
-            "action": action,
-            "label": ACTION_LABELS[action],
-            "error": error,
-            "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
+            "d": data,
+            "charts": {k: data[k] for k in chart_keys},
+            "ranges": [
+                ("30", "30 days"),
+                ("90", "90 days"),
+                ("365", "1 year"),
+                ("all", "All time"),
+            ],
         },
     )
+
+
+def _export_selection(request: HttpRequest):
+    form = ExportForm(request.GET or None, office=request.user.office)
+    chosen = form.cleaned_data if form.is_valid() else {}
+    queryset = export_queryset(
+        perms.visible_complaints(request.user),
+        department=chosen.get("department"),
+        platform=chosen.get("platform", ""),
+        status=chosen.get("status", ""),
+    )
+    return form, queryset
+
+
+@login_required
+def export_page(request: HttpRequest) -> HttpResponse:
+    if not perms.can_analyse(request.user):
+        return HttpResponseForbidden("The table download covers the whole office.")
+    form, queryset = _export_selection(request)
+    return render(
+        request,
+        "complaints/export.html",
+        {"form": form, "count": queryset.count(), "querystring": request.GET.urlencode()},
+    )
+
+
+@login_required
+def export_download(request: HttpRequest) -> HttpResponse:
+    if not perms.can_analyse(request.user):
+        return HttpResponseForbidden("The table download covers the whole office.")
+    _, queryset = _export_selection(request)
+    response = HttpResponse(
+        build_workbook(queryset),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    stamp = timezone.localdate().isoformat()
+    response["Content-Disposition"] = f'attachment; filename="sdm-complaints-{stamp}.xlsx"'
+    return response
 
 
 # ---------------------------------------------------------------- documents

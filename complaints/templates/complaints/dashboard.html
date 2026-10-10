@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Dashboard - SDM Complaint Tracker{% endblock %}
+{% block main_class %}page dash{% endblock %}
+{% block content %}
+<div class="dash-head">
+  <div>
+    <h2>Dashboard</h2>
+    <p class="muted small">How the office is handling complaints. Charts follow the period you choose; the ageing chart always shows what is open today.</p>
+  </div>
+  <nav class="range" aria-label="Period">
+    {% for key, label in ranges %}<a href="?range={{ key }}" {% if key == d.range_key %}class="on"{% endif %}>{{ label }}</a>{% endfor %}
+  </nav>
+</div>
+
+<section class="tiles">
+  <div class="tile"><span>Complaints received</span><b>{{ d.total }}</b></div>
+  <div class="tile"><span>Still open</span><b>{{ d.open }}</b></div>
+  <div class="tile"><span>Closed</span><b>{{ d.closed }}</b></div>
+  <div class="tile"><span>Average days to close</span><b>{{ d.avg_close_days|default_if_none:"-" }}</b></div>
+  <div class="tile"><span>Average days for a report</span><b>{{ d.avg_report_days|default_if_none:"-" }}</b></div>
+  <div class="tile"><span>Reports on time</span><b>{% if d.on_time_pct is None %}-{% else %}{{ d.on_time_pct }}%{% endif %}</b></div>
+  <div class="tile {% if d.overdue_reports %}tile-bad{% endif %}"><span>Reports overdue now</span><b>{{ d.overdue_reports }}</b></div>
+  <div class="tile"><span>ATRs sent back by portal</span><b>{% if d.atr.sent_back_pct is None %}-{% else %}{{ d.atr.sent_back_pct }}%{% endif %}</b></div>
+</section>
+
+<section class="grid">
+  <div class="card-box wide"><h4>Complaints received and closed, by week</h4><div class="chart"><canvas id="c-weekly"></canvas></div></div>
+  <div class="card-box"><h4>Where complaints stand</h4><div class="chart"><canvas id="c-by_state"></canvas></div></div>
+  <div class="card-box"><h4>Complaints by department</h4><div class="chart"><canvas id="c-by_department"></canvas></div></div>
+  <div class="card-box"><h4>Complaints by portal</h4><div class="chart"><canvas id="c-by_platform"></canvas></div></div>
+  <div class="card-box"><h4>Age of open complaints (days at current office)</h4><div class="chart"><canvas id="c-ageing"></canvas></div></div>
+  <div class="card-box"><h4>Average days a department takes to report</h4><div class="chart"><canvas id="c-dept_speed"></canvas></div></div>
+  <div class="card-box"><h4>What happens to ATRs on the portal</h4><div class="chart"><canvas id="c-atr"></canvas></div></div>
+  <div class="card-box"><h4>Villages with most complaints</h4><div class="chart"><canvas id="c-by_village"></canvas></div></div>
+  <div class="card-box"><h4>Complaint categories</h4><div class="chart"><canvas id="c-by_category"></canvas></div></div>
+  <div class="card-box"><h4>Common issues (tags)</h4><div class="chart"><canvas id="c-by_tag"></canvas></div></div>
+</section>
+
+<section class="grid two">
+  <div class="card-box">
+    <h4>Department report performance</h4>
+    <div class="table-wrap"><table class="dash-table">
+      <thead><tr><th>Department</th><th>Marked</th><th>Reported</th><th>On time</th><th>Avg days</th><th>Waiting</th><th>Overdue</th></tr></thead>
+      <tbody>
+        {% for p in d.dept_perf %}
+        <tr><td>{{ p.name }}</td><td>{{ p.sent }}</td><td>{{ p.answered }}</td>
+          <td>{% if p.on_time_pct is None %}-{% else %}{{ p.on_time_pct }}%{% endif %}</td>
+          <td>{{ p.avg_days|default_if_none:"-" }}</td><td>{{ p.waiting }}</td>
+          <td{% if p.late %} class="error"{% endif %}>{{ p.late }}</td></tr>
+        {% empty %}<tr><td colspan="7" class="muted">No complaints have been marked to a department in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card-box">
+    <h4>Open the longest at the current office</h4>
+    <div class="table-wrap"><table class="dash-table">
+      <thead><tr><th>Complaint</th><th>With</th><th>Days</th></tr></thead>
+      <tbody>
+        {% for c in d.oldest %}
+        <tr><td><a href="{% url 'complaints:detail' c.pk %}"><span class="ref">{{ c.ref_no }}</span></a> {{ c.subject|truncatechars:38 }}</td>
+          <td>{{ c.current_department|default:"SDM office" }}</td><td>{{ c.days_here }}</td></tr>
+        {% empty %}<tr><td colspan="3" class="muted">Nothing is open.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+{{ charts|json_script:"chart-data" }}
+<script src="{% static 'vendor/chart.umd.min.js' %}"></script>
+<script src="{% static 'js/dashboard.js' %}"></script>
+{% endblock %}

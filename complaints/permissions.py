@@ -37,6 +37,9 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
 _ADMIN_ACTIONS = _REVIEWER_ACTIONS  # Admin can do everything Reviewer can
 
 
+_OFFICE_WIDE = {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}
+
+
 def _roles(user) -> set[str]:
     return user.role_names if user.is_authenticated else set()
 
@@ -55,6 +58,12 @@ def visible_complaints(user) -> QuerySet[Complaint]:
     if Role.DEPARTMENT_OFFICER in roles and user.department_id:
         return qs.filter(current_department_id=user.department_id)
     return qs.none()
+
+
+def can_analyse(user) -> bool:
+    """The dashboard and the table download cover the whole office, so department officers
+    (who see only their own cases) are left out."""
+    return bool(user.is_authenticated and user.office_id and _roles(user) & _OFFICE_WIDE)
 
 
 def can(user, action: str, complaint: Complaint | None = None) -> bool:

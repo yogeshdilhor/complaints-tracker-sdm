@@ -37,6 +37,10 @@ class WheelWidget(forms.Widget):
         self.selected = selected
         self.data = data or {}
 
+    @staticmethod
+    def _known(items, chosen: str) -> bool:
+        return any(not own and chosen in (v, label) for v, label, own in items)
+
     def value_from_datadict(self, data, files, name):
         return data.get(name, "")
 
@@ -46,8 +50,12 @@ class WheelWidget(forms.Widget):
         if self.allow_own:
             items.append(("", OWN, True))
         start = next((i for i, (v, _, own) in enumerate(items) if not own and v == chosen), 0)
-        if chosen == START_ON_OWN and self.allow_own:
+        own_text = ""
+        if self.allow_own and (
+            chosen == START_ON_OWN or (chosen and not self._known(items, chosen))
+        ):
             start = len(items) - 1
+            own_text = "" if chosen == START_ON_OWN else chosen
         lis = format_html_join(
             "",
             '<li role="option" data-value="{}" data-label="{}"{}{}>{}</li>',
@@ -66,9 +74,10 @@ class WheelWidget(forms.Widget):
         if self.allow_own:
             own_input = format_html(
                 '<input type="text" class="wheel-own" name="{}_own" placeholder="{}" '
-                'maxlength="200" autocomplete="off" hidden>',
+                'maxlength="200" autocomplete="off" value="{}" hidden>',
                 name,
                 self.own_placeholder,
+                own_text,
             )
         return format_html(
             '<div class="wheel-field" data-name="{}" data-start="{}" data-config="{}">'

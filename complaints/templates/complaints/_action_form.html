@@ -5,6 +5,23 @@
   {% csrf_token %}
   <h4>{{ label }}</h4>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if staged %}
+  <input type="hidden" name="staged" value="{{ staged.sha }}">
+  <div class="staged">
+    <p class="staged-file"><span aria-hidden="true">&#128196;</span> <b>{{ staged.filename }}</b></p>
+    {% if unread %}<p class="muted small">This document could not be read automatically (it looks handwritten or has no text), so nothing was filled in. Please complete the details yourself.</p>
+    {% elif ai_used %}<p class="muted small">Filled in from the document. Please check every field before saving.</p>{% endif %}
+    <label>What this document says (kept with the document)
+      <textarea name="doc_summary" rows="4">{{ doc_summary }}</textarea>
+    </label>
+    <label>This stage is
+      <select name="type" hx-get="{{ stage_url }}" hx-target="#action-area" hx-trigger="change">
+        {% for key, text in stage_types %}<option value="{{ key }}" {% if key == stage_type %}selected{% endif %}>{{ text }}</option>{% endfor %}
+      </select>
+    </label>
+    <p class="muted small">Changing the type reloads the form below with the same document.</p>
+  </div>
+  {% endif %}
   {{ form.as_div }}
   <div class="form-buttons">
     <button type="submit">Save</button>

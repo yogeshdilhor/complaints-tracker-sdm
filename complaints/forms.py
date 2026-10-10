@@ -87,6 +87,29 @@ class ComplaintFilterForm(forms.Form):
         return self.cleaned_data if self.is_valid() else {}
 
 
+class ExportForm(forms.Form):
+    """Which complaints go into the Excel table."""
+
+    department = forms.ModelChoiceField(
+        queryset=Department.objects.none(),
+        required=False,
+        empty_label="All departments",
+        label="Department it was marked to",
+    )
+    platform = forms.ChoiceField(
+        choices=[("", "All portals"), *Platform.choices], required=False, label="Portal"
+    )
+    status = forms.ChoiceField(
+        choices=[("", "Open and closed"), ("open", "Open only"), ("closed", "Closed only")],
+        required=False,
+    )
+
+    def __init__(self, *args, office: Office | None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if office is not None:
+            self.fields["department"].queryset = Department.objects.filter(office=office)
+
+
 # ------------------------------------------------------------------ actions
 
 
