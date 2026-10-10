@@ -16,6 +16,7 @@ from django.views.decorators.http import require_http_methods
 from complaints import permissions as perms
 from complaints.forms import (
     ACTION_FORMS,
+    AddStageForm,
     AttachDocumentForm,
     ComplaintFilterForm,
     EditDetailsForm,
@@ -50,6 +51,7 @@ from complaints.workflow import (
     Action,
     TransitionError,
     add_note,
+    add_stage,
     apply_transition,
     attach_document,
     edit_details,
@@ -72,8 +74,24 @@ ACTION_LABELS = {
     perms.ATTACH_DOCUMENT: "Attach document",
     perms.ADD_NOTE: "Add note",
     perms.EDIT_DETAILS: "Edit details",
+    perms.ADD_STAGE: "Add a stage",
 }
-NON_STATE_ACTIONS = (perms.ATTACH_DOCUMENT, perms.ADD_NOTE, perms.EDIT_DETAILS)
+# What the "+" menu on the timeline offers, in plain words.
+MENU_LABELS = {
+    Action.ISSUE_NOTICE: "Mark to an officer for report",
+    Action.REISSUE_NOTICE: "Ask for the report again",
+    Action.RECORD_REPORT: "Record a report received",
+    Action.REVIEW_SATISFIED: "Accept the report",
+    Action.REVIEW_NOT_SATISFIED: "Report inadequate: ask again",
+    Action.SUBMIT_TO_PORTAL: "ATR uploaded on the portal",
+    Action.PORTAL_ACCEPTED: "Portal closed the complaint",
+    Action.PORTAL_REJECTED: "Portal re-opened the complaint",
+    Action.CLOSE_WITHOUT_PORTAL: "Resolve and file",
+    Action.REOPEN: "Re-open the complaint",
+    perms.ADD_STAGE: "Custom stage: name it yourself",
+    perms.EDIT_DETAILS: "Correct complainant details",
+}
+NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS)
 
 
 def _is_htmx(request: HttpRequest) -> bool:
@@ -147,8 +165,8 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
     _decorate(complaint)
     user = request.user
     state_actions = perms.allowed_actions(user, complaint)
-    actions = [(a, ACTION_LABELS[a]) for a in state_actions]
-    actions += [(a, ACTION_LABELS[a]) for a in NON_STATE_ACTIONS if perms.can(user, a, complaint)]
+    actions = [(a, MENU_LABELS[a]) for a in state_actions]
+    actions += [(a, MENU_LABELS[a]) for a in NON_STATE_ACTIONS if perms.can(user, a, complaint)]
     open_referral = complaint.referrals.filter(closed_on__isnull=True).first()
     return {
         "complaint": complaint,
@@ -182,6 +200,7 @@ def _form_for(action: str, request: HttpRequest, complaint: Complaint):
     forms_by_name = {
         perms.ATTACH_DOCUMENT: AttachDocumentForm,
         perms.ADD_NOTE: NoteForm,
+        perms.ADD_STAGE: AddStageForm,
         perms.EDIT_DETAILS: EditDetailsForm,
     }
     return forms_by_name[action](*data, **kwargs)
@@ -203,6 +222,10 @@ def _run_action(action: str, complaint: Complaint, user, form) -> None:
                 payload[form.file_key] = store_document(
                     complaint, form.attachment, form.file_kind, user
                 )
+            payload["extra_documents"] = [
+                store_document(complaint, a, Document.Kind.OTHER, user)
+                for a in form.extra_attachments
+            ]
             apply_transition(complaint, action, user, **payload)
         elif action == perms.ATTACH_DOCUMENT:
             attach_document(
@@ -213,6 +236,11 @@ def _run_action(action: str, complaint: Complaint, user, form) -> None:
                 supersedes=data["supersedes"],
                 headline=data.get("headline", ""),
             )
+        elif action == perms.ADD_STAGE:
+            documents = [
+                store_document(complaint, a, Document.Kind.OTHER, user) for a in data["files"]
+            ]
+            add_stage(complaint, user, data["headline"], data["note"], documents)
         elif action == perms.ADD_NOTE:
             add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:

@@ -13,11 +13,13 @@ REGISTER = "register"
 ATTACH_DOCUMENT = "attach_document"
 ADD_NOTE = "add_note"
 EDIT_DETAILS = "edit_details"
+ADD_STAGE = "add_stage"  # a stage the user names themselves, with any documents
 
 _CLERK_ACTIONS = {
     REGISTER,
     ATTACH_DOCUMENT,
     ADD_NOTE,
+    ADD_STAGE,
     EDIT_DETAILS,
     Action.ISSUE_NOTICE,
     Action.REISSUE_NOTICE,

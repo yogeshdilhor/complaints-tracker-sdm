@@ -10,6 +10,7 @@ from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 
 OWN = "Write my own..."
+START_ON_OWN = "__own__"  # pass as `selected` to open the wheel on "Write my own"
 
 
 class WheelWidget(forms.Widget):
@@ -45,6 +46,8 @@ class WheelWidget(forms.Widget):
         if self.allow_own:
             items.append(("", OWN, True))
         start = next((i for i, (v, _, own) in enumerate(items) if not own and v == chosen), 0)
+        if chosen == START_ON_OWN and self.allow_own:
+            start = len(items) - 1
         lis = format_html_join(
             "",
             '<li role="option" data-value="{}" data-label="{}"{}{}>{}</li>',

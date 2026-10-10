@@ -37,6 +37,7 @@ def _document_ids(event: Event) -> list[int]:
     p = event.payload
     ids = [p.get(key) for key in _DOCUMENT_KEYS]
     ids.append((p.get("new_referral") or {}).get("notice_document_id"))
+    ids.extend(p.get("document_ids") or [])
     return [i for i in dict.fromkeys(ids) if i]
 
 

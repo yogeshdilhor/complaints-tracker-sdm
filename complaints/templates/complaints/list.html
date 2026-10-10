@@ -9,21 +9,6 @@
           hx-get="{% url 'complaints:list' %}" hx-target="#list-pane" hx-push-url="true"
           hx-trigger="change, keyup changed delay:400ms from:#id_q, submit">
       <div class="search">{{ form.q }}</div>
-      <div class="filter-row">
-        {{ form.department }}
-        {{ form.village }}
-        {{ form.platform }}
-        {{ form.status }}
-      </div>
-      <details class="more-filters" {% if form.category.value or form.tag.value or form.date_from.value or form.date_to.value %}open{% endif %}>
-        <summary>More filters</summary>
-        <div class="filter-row">
-          {{ form.category }}
-          {{ form.tag }}
-          <label class="date">From {{ form.date_from }}</label>
-          <label class="date">To {{ form.date_to }}</label>
-        </div>
-      </details>
       <div class="chips" role="radiogroup" aria-label="Ageing">
         {% for value, label in buckets %}
         <label class="chip chip-{{ value|default:'all' }}">
@@ -32,6 +17,19 @@
         </label>
         {% endfor %}
       </div>
+      <details class="more-filters" {% if form.department.value or form.village.value or form.platform.value or form.status.value or form.category.value or form.tag.value or form.date_from.value or form.date_to.value %}open{% endif %}>
+        <summary>More filters</summary>
+        <div class="filter-row">
+          {{ form.department }}
+          {{ form.village }}
+          {{ form.platform }}
+          {{ form.status }}
+          {{ form.category }}
+          {{ form.tag }}
+          <label class="date">From {{ form.date_from }}</label>
+          <label class="date">To {{ form.date_to }}</label>
+        </div>
+      </details>
       <noscript><button type="submit">Apply</button></noscript>
     </form>
 

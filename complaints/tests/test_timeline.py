@@ -88,7 +88,7 @@ def test_the_detail_page_shows_one_timeline_with_documents_inside(
     apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar, notice_document=notice)
     client.force_login(clerk)
     html = client.get(reverse("complaints:detail", args=[c.pk])).content.decode()
-    assert "Case timeline" in html and "Marked to Tehsildar for report" in html
+    assert "Timeline" in html and "Marked to Tehsildar for report" in html
     assert "bdpo-notice.pdf" in html
     assert "Case documents" not in html and ">History<" not in html
 
@@ -177,3 +177,70 @@ def test_the_form_renders_wheels_for_the_officer_and_the_title(
     assert html.count('class="wheel-field"') == 2
     assert "Marked to {officer} for report" in html and "Write my own..." in html
     assert ">Tehsildar</li>" in html
+
+
+# ------------------------------------------------ custom stages and documents on any stage
+
+
+def test_a_custom_stage_has_your_title_note_and_any_number_of_documents(
+    client, clerk, make_complaint
+):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    c = make_complaint()
+    files = [
+        SimpleUploadedFile(f"photo{i}.pdf", b"%PDF-1.4 " + bytes([65 + i]), "application/pdf")
+        for i in range(3)
+    ]
+    response = _post(
+        client,
+        clerk,
+        c,
+        "add_stage",
+        {"headline": "Site inspection by SDM", "note": "Drain found blocked", "files": files},
+    )
+    assert response.status_code == 200
+    stage = build_timeline(c)[-1]
+    assert stage.title == "Site inspection by SDM"
+    assert "Drain found blocked" in stage.detail
+    assert len(stage.documents) == 3
+
+
+def test_a_custom_stage_needs_a_title(client, clerk, make_complaint):
+    c = make_complaint()
+    response = _post(client, clerk, c, "add_stage", {"headline": "", "note": "x"})
+    assert (
+        "Give the stage a title" in response.content.decode()
+        or "required" in response.content.decode().lower()
+    )
+    assert titles(c) == ["Complaint received"]
+
+
+def test_any_stage_can_carry_extra_documents(client, clerk, make_complaint, tehsildar):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    c = make_complaint()
+    extra = [SimpleUploadedFile("map.pdf", b"%PDF-1.4 map", "application/pdf")]
+    _post(client, clerk, c, "issue_notice", {"department": tehsildar.pk, "files": extra})
+    stage = build_timeline(c)[-1]
+    assert stage.title == "Marked to Tehsildar for report"
+    assert [d.original_filename for d in stage.documents] == ["map.pdf"]
+
+
+def test_the_plus_menu_offers_the_custom_stage_and_not_the_old_buttons(
+    client, clerk, make_complaint
+):
+    from django.urls import reverse
+
+    c = make_complaint()
+    client.force_login(clerk)
+    html = client.get(reverse("complaints:detail", args=[c.pk])).content.decode()
+    assert "Add stage" in html and "Custom stage: name it yourself" in html
+    assert "Attach document" not in html and "Add note" not in html
+
+
+def test_an_officer_cannot_add_a_custom_stage(client, officer, clerk, make_complaint, tehsildar):
+    c = make_complaint()
+    apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar)
+    response = _post(client, officer, c, "add_stage", {"headline": "x"})
+    assert response.status_code == 403

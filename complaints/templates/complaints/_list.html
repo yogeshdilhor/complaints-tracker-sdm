@@ -1,7 +1,7 @@
 {% if oob %}{% include "complaints/_kpi.html" %}{% endif %}
 <div class="list-head">
   <span>Showing <b>{{ page.start_index }}&ndash;{{ page.end_index }}</b> of <b>{{ page.paginator.count }}</b> complaint{{ page.paginator.count|pluralize }}</span>
-  <span class="hint">Click any case to inspect it on the right</span>
+  <span class="hint">Select a case to open it</span>
 </div>
 
 {% for c in page %}
@@ -10,22 +10,18 @@
   <div class="card-top">
     <strong class="ref">{{ c.ref_no }}</strong>
     <span class="tags">
-      {% if c.village %}<span class="tag">&#128205; {{ c.village }}</span>{% endif %}
+      {% if c.village %}<span class="tag">{{ c.village }}</span>{% endif %}
       <span class="tag tag-blue">{{ c.get_source_platform_display }}</span>
-      {% if c.is_open %}<span class="tag age age-{{ c.bucket }}">{{ c.days_pending }}d {{ c.bucket|title }}</span>
+      {% if c.is_open %}<span class="tag age age-{{ c.bucket }}">{{ c.days_pending }}d</span>
       {% else %}<span class="tag age age-closed">Closed</span>{% endif %}
     </span>
   </div>
   <div class="card-subject">{{ c.subject }}</div>
-  <div class="card-meta">
-    Citizen: <b>{{ c.complainant.name }}</b> &bull; Received: {{ c.received_on|date:"Y-m-d" }}
-    <span class="badge state-{{ c.current_state }}">{{ c.get_current_state_display }}</span>
-  </div>
   <div class="card-foot">
-    <span class="where">&#127963; {{ c.location }}</span>
-    <span class="pending pending-{{ c.bucket }}">
-      {% if c.is_open %}Pending at {{ c.location }} for {{ c.days_pending }} day{{ c.days_pending|pluralize:"(s),(s)" }}
-      {% else %}Closed {{ c.closed_on|date:"j M Y" }}{% endif %}
+    <span class="who">{{ c.complainant.name }} &middot; {{ c.received_on|date:"j M" }}</span>
+    <span class="where">
+      <span class="badge state-{{ c.current_state }}">{{ c.get_current_state_display }}</span>
+      {% if c.is_open %}<span class="pending pending-{{ c.bucket }}">at {{ c.location }}</span>{% endif %}
     </span>
   </div>
 </a>

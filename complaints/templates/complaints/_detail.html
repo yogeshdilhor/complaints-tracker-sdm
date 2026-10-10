@@ -2,84 +2,51 @@
 <div class="detail">
   <button type="button" class="back outline secondary"
           onclick="document.body.classList.remove('detail-open')">&larr; Back to list</button>
+  <div class="mobile-ref"><span class="ref">{{ complaint.ref_no }}</span> {{ complaint.subject }}</div>
 
-  <header class="case-head">
-    <div class="case-head-top">
-      <h3 class="ref">{{ complaint.ref_no }}</h3>
-      {% if complaint.village %}<span class="tag">&#128205; {{ complaint.village }}</span>{% endif %}
-    </div>
-    <p class="muted small">Registered: {{ complaint.received_on|date:"Y-m-d" }} &bull; Source: <span class="tag tag-blue">{{ complaint.get_source_platform_display }}</span></p>
-    <p class="subject">{{ complaint.subject }}</p>
-    <p class="small">Complainant: <b>{{ complaint.complainant.name }}</b>
-      {% if complaint.complainant.phone %}&bull; <a href="tel:{{ complaint.complainant.phone }}">{{ complaint.complainant.phone }}</a>{% endif %}
-      {% if complaint.village %}&bull; Village: <b>{{ complaint.village }}</b>{% endif %}</p>
+  {# Only what the list card does not already say: the summary, contact details, deadlines. #}
+  <section class="overview">
+    <p class="brief">{% if complaint.description %}{{ complaint.description|linebreaksbr }}{% else %}<span class="muted">No summary recorded.</span>{% endif %}</p>
     <dl class="facts">
-      {% if complaint.external_ref %}<dt>External ref</dt><dd>{{ complaint.external_ref }}</dd>{% endif %}
+      {% if complaint.complainant.phone %}<dt>Phone</dt><dd><a href="tel:{{ complaint.complainant.phone }}">{{ complaint.complainant.phone }}</a></dd>{% endif %}
+      {% if complaint.complainant.address %}<dt>Address</dt><dd>{{ complaint.complainant.address }}</dd>{% endif %}
+      {% if complaint.external_ref %}<dt>Portal / ref no.</dt><dd>{{ complaint.external_ref }}</dd>{% endif %}
       {% if complaint.category %}<dt>Category</dt><dd>{{ complaint.category }}</dd>{% endif %}
-      {% if complaint.related_to %}
-      <dt>Related to</dt>
-      <dd><a href="{% url 'complaints:detail' complaint.related_to_id %}">{{ complaint.related_to.ref_no }}</a></dd>
-      {% endif %}
+      {% if complaint.tags.all %}<dt>Tags</dt><dd>{% for t in complaint.tags.all %}<span class="tag">{{ t }}</span> {% endfor %}</dd>{% endif %}
+      {% if complaint.related_to %}<dt>Related to</dt><dd><a href="{% url 'complaints:detail' complaint.related_to_id %}">{{ complaint.related_to.ref_no }}</a></dd>{% endif %}
+      {% if open_referral %}<dt>Reply due</dt><dd{% if referral_overdue %} class="error"{% endif %}>{{ open_referral.due_on|date:"j M Y" }}{% if referral_overdue %} &middot; overdue{% endif %}</dd>{% endif %}
+      <dt>Total age</dt><dd>{{ total_age }} day{{ total_age|pluralize }}</dd>
     </dl>
-  </header>
-
-  <h4 class="section-title">Current status &amp; custody</h4>
-  <section class="custody custody-{{ complaint.bucket }}">
-    <div class="custody-main">
-      <div>
-        <small class="eyebrow">Current custodian</small>
-        <strong class="custodian">{{ complaint.location }}</strong>
-        {% if complaint.is_open %}<small class="muted">Since {{ complaint.current_stage_started_at|date:"Y-m-d" }}</small>{% endif %}
-      </div>
-      <div class="custody-age">
-        {% if complaint.is_open %}
-        <strong>{{ complaint.days_pending }} Day{{ complaint.days_pending|pluralize }} Pending{% if complaint.bucket == "critical" %} (Critical){% elif complaint.bucket == "overdue" %} (Overdue){% elif complaint.bucket == "warning" %} (Warning){% endif %}</strong>
-        {% else %}
-        <strong>Closed {{ complaint.closed_on|date:"j M Y" }}</strong>
-        {% endif %}
-        <small>Status: <span class="badge state-{{ complaint.current_state }}">{{ complaint.get_current_state_display }}</span></small>
-        <small class="muted">Total age {{ total_age }} day{{ total_age|pluralize }}</small>
-      </div>
-    </div>
-    {% if open_referral %}
-    <p class="marked"><b>Marked to {{ open_referral.to_department }}</b> on {{ open_referral.issued_on|date:"j M Y" }} &middot; <b>pending reply from {{ open_referral.to_department }}</b></p>
-    {% endif %}
-    {% if referral_overdue %}
-    <p class="error">Report overdue: due {{ open_referral.due_on|date:"j M Y" }}.</p>
-    {% elif open_referral %}
-    <p class="small">Reply due {{ open_referral.due_on|date:"j M Y" }}.</p>
-    {% endif %}
-    <p class="summary small">{{ summary }}</p>
   </section>
 
-  {% if actions %}
-  <section class="actions" aria-label="Actions">
-    {% for name, label in actions %}
-    <button type="button" class="outline"
-            hx-get="{% url 'complaints:action' complaint.pk name %}" hx-target="#action-area">{{ label }}</button>
-    {% endfor %}
-  </section>
-  {% endif %}
+  <div class="tl-head">
+    <h4 class="section-title">Timeline</h4>
+    {% if actions %}
+    <details class="add-menu">
+      <summary class="add-btn" title="Add a stage to the timeline"><span aria-hidden="true">+</span> Add stage</summary>
+      <ul>
+        {% for name, label in actions %}
+        <li><button type="button" hx-get="{% url 'complaints:action' complaint.pk name %}" hx-target="#action-area"
+                    onclick="this.closest('details').open=false">{{ label }}</button></li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  </div>
   <section id="action-area"></section>
 
-  <h4 class="section-title">Brief summary <span>(50&ndash;75 words)</span></h4>
-  <section class="brief">
-    {% if complaint.description %}{{ complaint.description|linebreaksbr }}{% else %}<span class="muted">No description recorded.</span>{% endif %}
-  </section>
-
-  <h4 class="section-title">Case timeline <span>(click a stage to see its documents)</span></h4>
   <ol class="journey">
     {% for st in timeline %}
     <li class="stage stage-{{ st.tone }}">
       {% if st.has_body %}
-      <details {% if forloop.last %}open{% endif %}>
+      <details>
         <summary>
           <span class="stage-title">{{ st.title }}</span>
           {% if st.documents %}<span class="clip" title="{{ st.documents|length }} document(s)">&#128206; {{ st.documents|length }}</span>{% endif %}
           <small class="stage-meta">{{ st.at|local_date }}{% if st.actor %} &middot; {{ st.actor.get_full_name|default:st.actor.username }}{% endif %}</small>
         </summary>
         <div class="stage-body">
-          {% if st.detail %}<p class="stage-detail">{{ st.detail }}</p>{% endif %}
+          {% if st.detail %}<p class="stage-detail">{{ st.detail|linebreaksbr }}</p>{% endif %}
           {% for d in st.documents %}
           <div class="doc">
             <div class="doc-row">

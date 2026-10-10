@@ -12,7 +12,7 @@ from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
 from complaints.services.search import BUCKET_CHOICES
 from complaints.services.timeline import portal_name
-from complaints.widgets import WheelWidget
+from complaints.widgets import START_ON_OWN, WheelWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
 from core.models import Category, Department, Office, Village
 
@@ -30,6 +30,21 @@ class AttachmentField(forms.FileField):
             return read_upload(upload)
         except UploadError as exc:
             raise ValidationError(str(exc)) from exc
+
+
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultiAttachmentField(forms.FileField):
+    """Any number of files, each checked for size and real type; returns a list of Attachments."""
+
+    widget = MultipleFileInput
+
+    def clean(self, data, initial=None):
+        uploads = data if isinstance(data, (list, tuple)) else [data]
+        single = AttachmentField(required=False)
+        return [a for a in (single.clean(u) for u in uploads if u) if a is not None]
 
 
 def _active_departments(office: Office):
@@ -142,7 +157,11 @@ class ActionForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
         self._new_department = ""
+        self.fields["files"] = MultiAttachmentField(
+            required=False, label="More documents for this stage (any number)"
+        )
         self.fields["headline"] = _headline_field(complaint, _ACTION_OF_FORM.get(type(self)))
+        self.order_fields(["department", "headline"])
         if "department" in self.fields:
             departments = _active_departments(complaint.office)
             field = self.fields["department"]
@@ -191,6 +210,10 @@ class ActionForm(forms.Form):
         if self.cleaned_data.get("headline"):
             data["headline"] = self.cleaned_data["headline"]
         return data
+
+    @property
+    def extra_attachments(self) -> list:
+        return self.cleaned_data.get("files") or []
 
     @property
     def attachment(self):
@@ -283,6 +306,31 @@ class NoteForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
         self.fields["headline"] = _headline_field(complaint, "add_note")
+
+
+class AddStageForm(forms.Form):
+    """A stage you name yourself: a title, an optional note, and any number of documents."""
+
+    note = forms.CharField(
+        required=False, widget=forms.Textarea(attrs={"rows": 3}), label="What happened (optional)"
+    )
+    files = MultiAttachmentField(required=False, label="Documents for this stage (any number)")
+
+    def __init__(self, *args, complaint: Complaint, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.complaint = complaint
+        headline = _headline_field(complaint, None)
+        headline.widget.selected = START_ON_OWN
+        headline.required = True
+        headline.label = "Name this stage"
+        self.fields["headline"] = headline
+        self.order_fields(["headline"])
+
+    def clean_headline(self) -> str:
+        value = (self.cleaned_data.get("headline") or "").strip()
+        if not value:
+            raise ValidationError("Give the stage a title.")
+        return value
 
 
 class AttachDocumentForm(forms.Form):

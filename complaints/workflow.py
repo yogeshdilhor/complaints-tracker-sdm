@@ -427,6 +427,10 @@ def apply_transition(complaint: Complaint, action: str, actor: Any, **data: Any)
                 f"'{action}' is not allowed when the complaint is {locked.current_state}."
             )
         headline = (data.pop("headline", "") or "").strip()[:HEADLINE_MAX]
+        extra_documents = data.pop("extra_documents", None) or []
+        for document in extra_documents:
+            if document.complaint_id != complaint.pk or document.is_deleted:
+                raise InvalidTransitionData("An attached document belongs to another complaint.")
         unexpected = set(data) - rule.fields
         if unexpected:
             raise InvalidTransitionData(f"Unexpected data for '{action}': {sorted(unexpected)}.")
@@ -448,6 +452,8 @@ def apply_transition(complaint: Complaint, action: str, actor: Any, **data: Any)
         } | outcome.payload
         if headline:
             payload["headline"] = headline
+        if extra_documents:
+            payload["document_ids"] = [d.pk for d in extra_documents]
         event = _log(locked, outcome.event_type, actor, at, payload)
 
     complaint.refresh_from_db()
@@ -538,6 +544,28 @@ def attach_document(
             payload["supersedes_id"] = supersedes.pk
         _log(complaint, EventType.DOCUMENT_ATTACHED, actor, timezone.now(), payload)
     return document
+
+
+def add_stage(
+    complaint: Complaint,
+    actor: Any,
+    headline: str,
+    note: str = "",
+    documents: list[Document] | None = None,
+) -> Event:
+    """A stage the user names themselves, with an optional note and any number of documents."""
+    headline = headline.strip()[:HEADLINE_MAX]
+    if not headline:
+        raise InvalidTransitionData("A stage needs a title.")
+    documents = documents or []
+    if any(d.complaint_id != complaint.pk for d in documents):
+        raise InvalidTransitionData("A document belongs to another complaint.")
+    payload: dict[str, Any] = {"headline": headline}
+    if note.strip():
+        payload["note"] = note.strip()
+    if documents:
+        payload["document_ids"] = [d.pk for d in documents]
+    return _log(complaint, EventType.NOTE_ADDED, actor, timezone.now(), payload)
 
 
 def add_note(complaint: Complaint, actor: Any, text: str, headline: str = "") -> Event:

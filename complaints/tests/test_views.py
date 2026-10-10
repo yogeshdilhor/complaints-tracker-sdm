@@ -76,7 +76,7 @@ def test_list_shows_complaints_kpis_and_filters(login, clerk, complaint):
     assert response.status_code == 200
     html = response.content.decode()
     assert complaint.ref_no in html
-    assert "Pending at SDM office" in html
+    assert "at SDM office" in html
     assert 'id="filters"' in html
 
 
@@ -119,17 +119,15 @@ def test_detail_full_page_and_htmx_pane(login, clerk, awaiting):
     assert "<html" in page and "<html" not in pane
     for html in (page, pane):
         assert awaiting.ref_no in html
-        assert "Notice to Tehsildar" in html
-        assert "Awaiting report" in html
         assert "Marked to Tehsildar for report" in html
 
 
 def test_detail_only_offers_actions_valid_for_the_state_and_role(login, clerk, reviewer, awaiting):
     url = reverse("complaints:detail", args=[awaiting.pk])
     as_clerk = login(clerk).get(url).content.decode()
-    assert "Record report received" in as_clerk and "Re-issue notice" in as_clerk
-    assert "Issue notice<" not in as_clerk and "Mark satisfied" not in as_clerk
-    assert "Reopen" not in as_clerk
+    assert "Record a report received" in as_clerk and "Ask for the report again" in as_clerk
+    assert "Mark to an officer for report" not in as_clerk and "Accept the report" not in as_clerk
+    assert "Re-open the complaint" not in as_clerk
 
 
 def test_detail_of_hidden_complaint_is_404(login, officer, complaint):
@@ -139,7 +137,7 @@ def test_detail_of_hidden_complaint_is_404(login, officer, complaint):
 
 def test_auditor_sees_the_timeline_but_no_action_buttons(login, auditor, awaiting):
     html = login(auditor).get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
-    assert "Case timeline" in html and "Marked to Tehsildar for report" in html
+    assert "Timeline" in html and "Marked to Tehsildar for report" in html
     assert 'hx-get="/c/' not in html
 
 
@@ -364,7 +362,8 @@ def test_full_loop_through_the_ui(login, clerk, reviewer, complaint, tehsildar):
         c.refresh_from_db()
     assert c.current_state == State.CLOSED
     detail = login(reviewer).get(reverse("complaints:detail", args=[c.pk])).content.decode()
-    assert "Accepted by CM portal" in detail and "Reopen" in detail
+    assert "Complaint closed on CM Window portal" in detail
+    assert "Re-open the complaint" in detail
 
 
 # -------------------------------------------------------------- documents

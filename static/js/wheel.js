@@ -107,6 +107,7 @@
       });
     }
 
+    if (own) { own.hidden = !isOwn(items[index]); }
     refreshLabels();
     sync();
     requestAnimationFrame(function () { ul.scrollTop = index * row(); });
