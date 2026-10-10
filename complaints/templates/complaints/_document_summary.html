@@ -1,0 +1,5 @@
+{% if error %}
+<p class="doc-summary muted">{{ error }}</p>
+{% else %}
+<p class="doc-summary">{{ document.summary|linebreaksbr }}</p>
+{% endif %}

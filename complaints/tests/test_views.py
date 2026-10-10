@@ -700,3 +700,51 @@ def test_every_seeded_complaint_renders_in_every_view(db, client):
     officer = User.objects.get(username="officer")
     client.force_login(officer)
     assert client.get(reverse("complaints:list")).status_code == 200
+
+
+# --------------------------------------------------------- document summary
+
+
+def test_document_summary_is_made_once_and_kept(
+    login, clerk, complaint, make_document, settings, monkeypatch
+):
+    settings.OPENAI_API_KEY = "test-key"
+    doc = make_document(complaint)
+    doc.extracted_text = "The inquiry found the drain was blocked and it was cleaned."
+    doc.save()
+    calls = []
+    monkeypatch.setattr(
+        "complaints.views.summarise_report",
+        lambda text, kind: calls.append(kind) or "Drain cleaned after inquiry.",
+    )
+    url = reverse("complaints:document_summary", args=[doc.pk])
+    for _ in range(2):
+        response = login(clerk).post(url)
+        assert "Drain cleaned after inquiry." in response.content.decode()
+    assert len(calls) == 1
+    doc.refresh_from_db()
+    assert doc.summary == "Drain cleaned after inquiry."
+
+
+def test_document_summary_failure_is_not_saved(
+    login, clerk, complaint, make_document, settings, monkeypatch
+):
+    settings.OPENAI_API_KEY = "test-key"
+    doc = make_document(complaint)
+    doc.extracted_text = "Some text."
+    doc.save()
+    monkeypatch.setattr("complaints.views.summarise_report", lambda text, kind: None)
+    response = login(clerk).post(reverse("complaints:document_summary", args=[doc.pk]))
+    assert "could not be made" in response.content.decode()
+    doc.refresh_from_db()
+    assert doc.summary == ""
+
+
+def test_document_summary_needs_login_post_and_visibility(
+    client, login, officer, complaint, make_document
+):
+    doc = make_document(complaint)
+    url = reverse("complaints:document_summary", args=[doc.pk])
+    assert client.post(url).status_code == 302
+    assert login(officer).get(url).status_code == 405
+    assert login(officer).post(url).status_code == 404  # complaint is not with their unit

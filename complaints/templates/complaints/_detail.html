@@ -63,9 +63,14 @@
       <li>
         <a href="{% url 'complaints:document' d.pk %}" target="_blank" rel="noopener">{{ d.original_filename }}</a>
         <a href="{% url 'complaints:document' d.pk %}?download=1" class="secondary">download</a>
+        <a href="#" class="secondary" hx-post="{% url 'complaints:document_summary' d.pk %}"
+           hx-target="#doc-summary-{{ d.pk }}" hx-swap="innerHTML"
+           hx-indicator="#doc-summary-{{ d.pk }}"
+           onclick="this.closest('li').querySelector('.doc-summary-box').innerHTML='<small class=muted>Reading the document and summarising&hellip; this can take up to 30 seconds.</small>';return false;">summary</a>
         <small>{{ d.uploaded_at|local_dt }}</small>
         {% if d.supersedes %}<small>(replaces {{ d.supersedes.original_filename }})</small>{% endif %}
         {% if d.superseded_by.all %}<small class="muted">(superseded)</small>{% endif %}
+        <div class="doc-summary-box" id="doc-summary-{{ d.pk }}"></div>
       </li>
       {% endfor %}
     </ul>

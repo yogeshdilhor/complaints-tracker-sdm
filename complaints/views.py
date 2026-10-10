@@ -32,6 +32,7 @@ from complaints.models import (
     State,
 )
 from complaints.services import intake
+from complaints.services.description_summary import summarise_description, summarise_report
 from complaints.services.documents import DuplicateDocument, extract, store_document
 from complaints.services.pendency import (
     ageing_bucket,
@@ -262,6 +263,42 @@ def document_download(request: HttpRequest, pk: int) -> FileResponse:
     return response
 
 
+@login_required
+@require_http_methods(["POST"])
+def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
+    """A 50-75 word summary of one document, made on the first click and then kept."""
+    document = get_object_or_404(Document, pk=pk, is_deleted=False)
+    if not perms.visible_complaints(request.user).filter(pk=document.complaint_id).exists():
+        raise Http404
+    error = ""
+    if not document.summary:
+        if not document.extracted_text:  # reports are uploaded without being read; read now
+            with document.file.open("rb") as handle:
+                extraction = extract(handle.read(), document.mime_type)
+            Document.objects.filter(pk=document.pk).update(
+                extracted_text=extraction.text,
+                text_status=extraction.status,
+                page_count=document.page_count or extraction.pages,
+            )
+            document.extracted_text = extraction.text
+        if not document.extracted_text.strip():
+            error = "No text could be read from this document."
+        elif not settings.OPENAI_API_KEY:
+            error = "Summaries are switched off (no API key is set)."
+        else:
+            summary = summarise_report(document.extracted_text, document.get_kind_display())
+            if summary:
+                Document.objects.filter(pk=document.pk).update(summary=summary)
+                document.summary = summary
+            else:
+                error = "The summary could not be made just now. Please try again."
+    return render(
+        request,
+        "complaints/_document_summary.html",
+        {"document": document, "error": error},
+    )
+
+
 # ------------------------------------------------------------------- intake
 
 INTAKE_SESSION_KEY = "intake"
@@ -304,6 +341,12 @@ def intake_review(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         form = IntakeForm(request.POST, office=office)
     else:
+        # Summarise once per staged file; a page refresh must not call the API again.
+        if meta.get("summary_for") != meta["sha"]:
+            meta["description_summary"] = summarise_description(guess.description)
+            meta["summary_for"] = meta["sha"]
+            request.session[INTAKE_SESSION_KEY] = meta
+        guess.description = meta["description_summary"]
         form = IntakeForm(initial=guess.as_initial(), office=office)
 
     duplicates: list = []

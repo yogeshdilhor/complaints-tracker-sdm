@@ -213,3 +213,5 @@ article form [role=button] { margin-left: .4rem; }
   .table-wrap { box-shadow: none; }
   tr { break-inside: avoid; }
 }
+
+.doc-summary { margin: .2rem 0 .4rem; font-size: .9rem; }

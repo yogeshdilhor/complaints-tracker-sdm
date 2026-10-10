@@ -72,7 +72,7 @@ Django's superuser flag grants nothing inside the app; roles do. Case tables (co
 
 Python 3.12, Django 5.2, PostgreSQL 16, Django templates + HTMX 1.9 and Pico.css 2 (both vendored in `static/vendor`, no CDN), Gunicorn, Docker Compose, pytest + pytest-django, ruff.
 
-Not used on purpose: React/Vite, Celery/Redis, a REST API layer, S3, microservices, LLM calls. Do not add these without discussion.
+Not used on purpose: React/Vite, Celery/Redis, a REST API layer, S3, microservices, LLM calls (one exception: the optional intake description summary, enabled by `OPENAI_API_KEY`). Do not add these without discussion.
 
 ## Requirements for running locally
 
@@ -185,6 +185,8 @@ All configuration is through environment variables, read from `.env` if present.
 | `CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins, prod settings only |
 | `SECURE_SSL_REDIRECT` | `True` | prod settings only |
 | `SECURE_HSTS_SECONDS` | `31536000` | prod settings only |
+| `OPENAI_API_KEY` | empty | Optional. When set, intake shortens the scanned letter to a 50-75 word description; when empty the full text is used |
+| `OPENAI_MODEL` | `gpt-4.1-nano` | Model used for that summary |
 
 Values kept in `config/settings/base.py`: `AGEING_THRESHOLDS` (0 safe, 3 warning, 7 overdue, 10 critical days), `PAGE_SIZE` (25), `MAX_UPLOAD_BYTES` (10 MB; PDF, JPG, PNG only), `INTAKE_OCR_MAX_PAGES` (6).
 

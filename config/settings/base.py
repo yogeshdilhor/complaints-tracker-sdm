@@ -97,3 +97,14 @@ PAGE_SIZE = 25
 
 # Intake runs OCR on image-only PDF pages (scans, photos, screenshots), at most this many per file.
 INTAKE_OCR_MAX_PAGES = 6
+
+# Optional: shortens a scanned letter into the description field. Empty key = feature off.
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4.1-nano")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"complaints": {"handlers": ["console"], "level": "INFO"}},
+}

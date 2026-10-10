@@ -9,7 +9,7 @@ Scale: ~100 complaints/week, one office, 10-20 users. Do not over-engineer.
 
 ## Stack (do not add to it without asking)
 Python 3.12, Django 5.2, PostgreSQL 16, Django templates + HTMX (vendored in `static/vendor`), Pico.css, Gunicorn, Docker Compose, pytest + pytest-django, ruff.
-NOT allowed: React/Vite, Celery/Redis, DRF API layer, S3, microservices, LLM calls.
+NOT allowed: React/Vite, Celery/Redis, DRF API layer, S3, microservices, LLM calls (one exception: the optional description summary in `complaints/services/description_summary.py`).
 Hosting is undecided (free tier target), so keep the app host-agnostic: configuration through env vars (`DATABASE_URL`, `MEDIA_ROOT`).
 
 ## Hard rules
