@@ -91,3 +91,89 @@ def test_the_detail_page_shows_one_timeline_with_documents_inside(
     assert "Case timeline" in html and "Marked to Tehsildar for report" in html
     assert "bdpo-notice.pdf" in html
     assert "Case documents" not in html and ">History<" not in html
+
+
+# ------------------------------------------------- headlines and typed-in officers
+
+
+def test_a_chosen_headline_replaces_the_default_title(make_complaint, clerk, tehsildar):
+    c = make_complaint()
+    apply_transition(
+        c, Action.ISSUE_NOTICE, clerk, department=tehsildar, headline="Sent to Tehsildar urgently"
+    )
+    stage = build_timeline(c)[-1]
+    assert stage.title == "Sent to Tehsildar urgently"
+    assert "Report due by" in stage.detail  # the rest of the stage is unchanged
+
+
+def test_headline_is_trimmed_capped_and_optional(make_complaint, clerk, tehsildar):
+    c = make_complaint()
+    apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar, headline="  ")
+    assert build_timeline(c)[-1].title == "Marked to Tehsildar for report"
+    apply_transition(c, Action.RECORD_REPORT, clerk, headline="x" * 500)
+    assert len(build_timeline(c)[-1].title) == 200
+
+
+def test_notes_and_documents_can_carry_a_headline(make_complaint, clerk):
+    from complaints.workflow import add_note
+
+    c = make_complaint()
+    add_note(c, clerk, "Called the BDPO", headline="Phone call with BDPO")
+    attach_document(
+        c, clerk, fake_attachment("x"), Document.Kind.OTHER, headline="Photo from the site"
+    )
+    assert titles(c)[-2:] == ["Phone call with BDPO", "Photo from the site"]
+
+
+def _post(client, user, complaint, action, data):
+    from django.urls import reverse
+
+    client.force_login(user)
+    return client.post(
+        reverse("complaints:action", args=[complaint.pk, action]),
+        data,
+        HTTP_HX_REQUEST="true",
+    )
+
+
+def test_the_action_form_saves_the_picked_headline(client, clerk, make_complaint, tehsildar):
+    c = make_complaint()
+    _post(client, clerk, c, "issue_notice", {"department": tehsildar.pk, "headline": "My title"})
+    assert titles(c)[-1] == "My title"
+
+
+def test_writing_my_own_officer_creates_that_department(client, clerk, make_complaint, office):
+    from core.models import Department
+
+    c = make_complaint()
+    _post(client, clerk, c, "issue_notice", {"department": "", "department_own": "EXIN DHBVN"})
+    c.refresh_from_db()
+    assert c.current_department.name == "EXIN DHBVN"
+    assert c.current_department.kind == Department.Kind.EXTERNAL_DEPARTMENT
+    # Typing the same name again reuses it instead of making a duplicate.
+    d = make_complaint()
+    _post(client, clerk, d, "issue_notice", {"department": "", "department_own": "exin dhbvn"})
+    assert Department.objects.filter(office=office, name__iexact="EXIN DHBVN").count() == 1
+
+
+def test_an_officer_is_still_required(client, clerk, make_complaint):
+    c = make_complaint()
+    response = _post(client, clerk, c, "issue_notice", {"department": ""})
+    assert "Choose who this goes to" in response.content.decode()
+    c.refresh_from_db()
+    assert c.current_state == "RECEIVED"
+
+
+def test_the_form_renders_wheels_for_the_officer_and_the_title(
+    client, clerk, make_complaint, tehsildar
+):
+    from django.urls import reverse
+
+    c = make_complaint()
+    client.force_login(clerk)
+    html = client.get(
+        reverse("complaints:action", args=[c.pk, "issue_notice"]), HTTP_HX_REQUEST="true"
+    ).content.decode()
+    assert html.count('class="wheel-field"') == 2
+    assert "Marked to {officer} for report" in html and "Write my own..." in html
+    assert ">Tehsildar</li>" in html

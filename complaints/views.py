@@ -206,10 +206,15 @@ def _run_action(action: str, complaint: Complaint, user, form) -> None:
             apply_transition(complaint, action, user, **payload)
         elif action == perms.ATTACH_DOCUMENT:
             attach_document(
-                complaint, user, data["file"], data["kind"], supersedes=data["supersedes"]
+                complaint,
+                user,
+                data["file"],
+                data["kind"],
+                supersedes=data["supersedes"],
+                headline=data.get("headline", ""),
             )
         elif action == perms.ADD_NOTE:
-            add_note(complaint, user, data["text"])
+            add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:
             edit_details(complaint, user, **data)
 

@@ -26,7 +26,7 @@ class Stage:
         return bool(self.detail or self.documents)
 
 
-def _portal(complaint: Complaint) -> str:
+def portal_name(complaint: Complaint) -> str:
     """'Samadhan Shivir portal'; a plain 'portal' for complaints that did not come from one."""
     if complaint.source_platform == Platform.INTERNAL:
         return "portal"
@@ -43,7 +43,13 @@ def _document_ids(event: Event) -> list[int]:
 def _describe(event: Event, complaint: Complaint) -> tuple[str, str, str]:
     """(title, tone, detail) for one event."""
     p = event.payload
-    portal = _portal(complaint)
+    title, tone, detail = _default_description(event, complaint)
+    return (p.get("headline") or title), tone, detail
+
+
+def _default_description(event: Event, complaint: Complaint) -> tuple[str, str, str]:
+    p = event.payload
+    portal = portal_name(complaint)
     match event.type:
         case EventType.COMPLAINT_REGISTERED:
             via = complaint.get_source_platform_display()

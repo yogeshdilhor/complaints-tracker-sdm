@@ -30,6 +30,8 @@ from complaints.services import documents as doc_service
 from complaints.services.pendency import sla_days
 from core.models import Department, Office
 
+HEADLINE_MAX = 200  # a stage's title on the timeline, when the user writes or picks their own
+
 
 class TransitionError(Exception):
     pass
@@ -424,6 +426,7 @@ def apply_transition(complaint: Complaint, action: str, actor: Any, **data: Any)
             raise InvalidTransition(
                 f"'{action}' is not allowed when the complaint is {locked.current_state}."
             )
+        headline = (data.pop("headline", "") or "").strip()[:HEADLINE_MAX]
         unexpected = set(data) - rule.fields
         if unexpected:
             raise InvalidTransitionData(f"Unexpected data for '{action}': {sorted(unexpected)}.")
@@ -443,6 +446,8 @@ def apply_transition(complaint: Complaint, action: str, actor: Any, **data: Any)
             "from_state": from_state,
             "to_state": outcome.to_state,
         } | outcome.payload
+        if headline:
+            payload["headline"] = headline
         event = _log(locked, outcome.event_type, actor, at, payload)
 
     complaint.refresh_from_db()
@@ -522,20 +527,26 @@ def attach_document(
     attachment: doc_service.Attachment,
     kind: str,
     supersedes: Document | None = None,
+    headline: str = "",
 ) -> Document:
     with transaction.atomic():
         document = doc_service.store_document(complaint, attachment, kind, actor, supersedes)
         payload = {"document_id": document.pk, "kind": kind}
+        if headline.strip():
+            payload["headline"] = headline.strip()[:HEADLINE_MAX]
         if supersedes is not None:
             payload["supersedes_id"] = supersedes.pk
         _log(complaint, EventType.DOCUMENT_ATTACHED, actor, timezone.now(), payload)
     return document
 
 
-def add_note(complaint: Complaint, actor: Any, text: str) -> Event:
+def add_note(complaint: Complaint, actor: Any, text: str, headline: str = "") -> Event:
     if _blank(text):
         raise InvalidTransitionData("Note text is required.")
-    return _log(complaint, EventType.NOTE_ADDED, actor, timezone.now(), {"note": text.strip()})
+    payload = {"note": text.strip()}
+    if headline.strip():
+        payload["headline"] = headline.strip()[:HEADLINE_MAX]
+    return _log(complaint, EventType.NOTE_ADDED, actor, timezone.now(), payload)
 
 
 EDITABLE_COMPLAINT_FIELDS = (

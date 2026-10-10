@@ -11,6 +11,8 @@ from complaints.models import Complaint, Document, Platform, State, Tag
 from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
 from complaints.services.search import BUCKET_CHOICES
+from complaints.services.timeline import portal_name
+from complaints.widgets import WheelWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
 from core.models import Category, Department, Office, Village
 
@@ -73,6 +75,58 @@ class ComplaintFilterForm(forms.Form):
 # ------------------------------------------------------------------ actions
 
 
+# The stage titles offered on the timeline; {officer} and {portal} are filled in as you pick.
+HEADLINE_PRESETS = [
+    "Complaint received",
+    "Marked to {officer} for report",
+    "{officer} report filed",
+    "Report accepted by SDM",
+    "Report found inadequate; {officer} asked to report again",
+    "ATR uploaded on {portal}",
+    "Complaint re-opened on {portal}",
+    "Complaint closed on {portal}",
+    "Resolved and filed",
+    "Complaint re-opened",
+    "Note added",
+    "Document added",
+]
+# Which title is pre-selected for each action.
+DEFAULT_HEADLINE = {
+    "issue_notice": "Marked to {officer} for report",
+    "reissue_notice": "Marked to {officer} for report",
+    "record_report": "{officer} report filed",
+    "review_satisfied": "Report accepted by SDM",
+    "review_not_satisfied": "Report found inadequate; {officer} asked to report again",
+    "submit_to_portal": "ATR uploaded on {portal}",
+    "portal_accepted": "Complaint closed on {portal}",
+    "portal_rejected": "Complaint re-opened on {portal}",
+    "close_without_portal": "Resolved and filed",
+    "reopen": "Complaint re-opened",
+    "add_note": "Note added",
+    "attach_document": "Document added",
+}
+
+
+def _headline_field(complaint: Complaint, action: str | None) -> forms.CharField:
+    """A wheel of stage titles, with a way to write your own."""
+    current = complaint.current_department
+    return forms.CharField(
+        required=False,
+        max_length=200,
+        label="Stage title on the timeline",
+        widget=WheelWidget(
+            [(t, t) for t in HEADLINE_PRESETS],
+            own_placeholder="Write the title of this stage",
+            selected=DEFAULT_HEADLINE.get(action or ""),
+            data={
+                "kind": "headline",
+                "portal": portal_name(complaint),
+                "officer": str(current) if current else "",
+            },
+        ),
+    )
+
+
 class ActionForm(forms.Form):
     """Base for forms that feed apply_transition().
 
@@ -87,15 +141,55 @@ class ActionForm(forms.Form):
     def __init__(self, *args, complaint: Complaint, **kwargs):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
+        self._new_department = ""
+        self.fields["headline"] = _headline_field(complaint, _ACTION_OF_FORM.get(type(self)))
         if "department" in self.fields:
-            self.fields["department"].queryset = _active_departments(complaint.office)
+            departments = _active_departments(complaint.office)
+            field = self.fields["department"]
+            self._department_required = field.required
+            field.queryset = departments
+            field.required = False  # "Write my own" posts no id; clean() checks instead
+            field.widget = WheelWidget(
+                [("", "Choose...")] + [(d.pk, str(d)) for d in departments],
+                own_placeholder="Type the officer or office",
+                data={"kind": "officer"},
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        if "department" in self.fields and not cleaned.get("department"):
+            own = (self.data.get("department_own") or "").strip()
+            if own:
+                self._new_department = own[:200]
+            elif self._department_required:
+                self.add_error("department", "Choose who this goes to, or write the name.")
+        return cleaned
+
+    def _department_named(self, name: str) -> Department:
+        """The office's department of this name, created if it does not exist yet."""
+        existing = Department.objects.filter(
+            office=self.complaint.office, name__iexact=name
+        ).first()
+        if existing is not None:
+            return existing
+        return Department.objects.create(
+            office=self.complaint.office,
+            name=name,
+            short_name=name[:50],
+            kind=Department.Kind.EXTERNAL_DEPARTMENT,
+        )
 
     def transition_data(self) -> dict[str, Any]:
+        """Call inside the transaction: a typed-in officer becomes a department here."""
         data = {}
         for name in self.transition_fields:
             value = self.cleaned_data.get(name)
             if value not in (None, ""):
                 data[name] = value
+        if self._new_department:
+            data["department"] = self._department_named(self._new_department)
+        if self.cleaned_data.get("headline"):
+            data["headline"] = self.cleaned_data["headline"]
         return data
 
     @property
@@ -188,6 +282,7 @@ class NoteForm(forms.Form):
     def __init__(self, *args, complaint: Complaint, **kwargs):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
+        self.fields["headline"] = _headline_field(complaint, "add_note")
 
 
 class AttachDocumentForm(forms.Form):
@@ -203,6 +298,7 @@ class AttachDocumentForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
         self.fields["supersedes"].queryset = complaint.documents.filter(is_deleted=False)
+        self.fields["headline"] = _headline_field(complaint, "attach_document")
 
 
 class EditDetailsForm(forms.Form):
@@ -304,3 +400,6 @@ ACTION_FORMS: dict[str, type[forms.Form]] = {
     Action.CLOSE_WITHOUT_PORTAL: ReasonForm,
     Action.REOPEN: ReasonForm,
 }
+
+
+_ACTION_OF_FORM = {form: action for action, form in ACTION_FORMS.items()}
