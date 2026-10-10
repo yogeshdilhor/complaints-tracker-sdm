@@ -50,6 +50,12 @@ def event_detail(event) -> str:
 
 
 @register.filter
+def local_date(value) -> str:
+    local = timezone.localtime(value)
+    return f"{local.day} {local:%b %Y}"
+
+
+@register.filter
 def local_dt(value) -> str:
     local = timezone.localtime(value)
     return f"{local.day} {local:%b %Y, %H:%M}"

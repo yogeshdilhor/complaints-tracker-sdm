@@ -45,6 +45,7 @@ from complaints.services.pendency import (
 )
 from complaints.services.search import filter_complaints, kpi_counts, paginate
 from complaints.services.summary import build_summary
+from complaints.services.timeline import build_timeline
 from complaints.workflow import (
     Action,
     TransitionError,
@@ -142,17 +143,6 @@ def complaint_list(request: HttpRequest) -> HttpResponse:
 # ------------------------------------------------------------------- detail
 
 
-def _grouped_documents(complaint: Complaint) -> list[tuple[str, list[Document]]]:
-    groups: dict[str, list[Document]] = defaultdict(list)
-    for doc in (
-        complaint.documents.filter(is_deleted=False)
-        .select_related("supersedes")
-        .prefetch_related("superseded_by")
-    ):
-        groups[doc.get_kind_display()].append(doc)
-    return list(groups.items())
-
-
 def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) -> dict[str, Any]:
     _decorate(complaint)
     user = request.user
@@ -163,8 +153,7 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
     return {
         "complaint": complaint,
         "summary": build_summary(complaint),
-        "documents": _grouped_documents(complaint),
-        "events": complaint.events.select_related("actor"),
+        "timeline": build_timeline(complaint),
         "actions": actions,
         "total_age": total_age_days(complaint),
         "open_referral": open_referral,

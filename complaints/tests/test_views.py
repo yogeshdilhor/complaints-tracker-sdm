@@ -121,7 +121,7 @@ def test_detail_full_page_and_htmx_pane(login, clerk, awaiting):
         assert awaiting.ref_no in html
         assert "Notice to Tehsildar" in html
         assert "Awaiting report" in html
-        assert "Notice Issued" in html
+        assert "Marked to Tehsildar for report" in html
 
 
 def test_detail_only_offers_actions_valid_for_the_state_and_role(login, clerk, reviewer, awaiting):
@@ -137,9 +137,9 @@ def test_detail_of_hidden_complaint_is_404(login, officer, complaint):
     assert response.status_code == 404
 
 
-def test_auditor_sees_history_but_no_action_buttons(login, auditor, awaiting):
+def test_auditor_sees_the_timeline_but_no_action_buttons(login, auditor, awaiting):
     html = login(auditor).get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
-    assert "History" in html
+    assert "Case timeline" in html and "Marked to Tehsildar for report" in html
     assert 'hx-get="/c/' not in html
 
 

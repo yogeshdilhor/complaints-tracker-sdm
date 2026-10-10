@@ -67,44 +67,49 @@
     {% if complaint.description %}{{ complaint.description|linebreaksbr }}{% else %}<span class="muted">No description recorded.</span>{% endif %}
   </section>
 
-  <h4 class="section-title">Case documents &amp; attachments</h4>
-  <section>
-    {% for kind, docs in documents %}
-    {% for d in docs %}
-    <div class="doc">
-      <div class="doc-row">
-        <span class="doc-icon" aria-hidden="true">&#128196;</span>
-        <div class="doc-name">
-          <b>{{ d.original_filename }}</b>
-          <small class="muted"><span class="tag">{{ kind }}</span> {{ d.uploaded_at|local_dt }}
-            {% if d.supersedes %}&bull; replaces {{ d.supersedes.original_filename }}{% endif %}
-            {% if d.superseded_by.all %}&bull; superseded{% endif %}</small>
+  <h4 class="section-title">Case timeline <span>(click a stage to see its documents)</span></h4>
+  <ol class="journey">
+    {% for st in timeline %}
+    <li class="stage stage-{{ st.tone }}">
+      {% if st.has_body %}
+      <details {% if forloop.last %}open{% endif %}>
+        <summary>
+          <span class="stage-title">{{ st.title }}</span>
+          {% if st.documents %}<span class="clip" title="{{ st.documents|length }} document(s)">&#128206; {{ st.documents|length }}</span>{% endif %}
+          <small class="stage-meta">{{ st.at|local_date }}{% if st.actor %} &middot; {{ st.actor.get_full_name|default:st.actor.username }}{% endif %}</small>
+        </summary>
+        <div class="stage-body">
+          {% if st.detail %}<p class="stage-detail">{{ st.detail }}</p>{% endif %}
+          {% for d in st.documents %}
+          <div class="doc">
+            <div class="doc-row">
+              <span class="doc-icon" aria-hidden="true">&#128196;</span>
+              <div class="doc-name">
+                <b>{{ d.original_filename }}</b>
+                <small class="muted">{{ d.get_kind_display }} &middot; {{ d.uploaded_at|local_dt }}
+                  {% if d.supersedes %}&middot; replaces {{ d.supersedes.original_filename }}{% endif %}
+                  {% if d.superseded_by.all %}&middot; superseded{% endif %}</small>
+              </div>
+              <div class="doc-links">
+                <a href="#" hx-post="{% url 'complaints:document_summary' d.pk %}"
+                   hx-target="#doc-summary-{{ d.pk }}" hx-swap="innerHTML"
+                   onclick="this.closest('.doc').querySelector('.doc-summary-box').innerHTML='<small class=muted>Reading the document and summarising&hellip; this can take up to 30 seconds.</small>';return false;">{% if d.summary %}Refresh summary{% else %}Summarise{% endif %}</a>
+                <a href="{% url 'complaints:document' d.pk %}" target="_blank" rel="noopener">Open &#8599;</a>
+                <a href="{% url 'complaints:document' d.pk %}?download=1">Download</a>
+              </div>
+            </div>
+            <div class="doc-summary-box" id="doc-summary-{{ d.pk }}">{% if d.summary %}<p class="doc-summary">{{ d.summary|linebreaksbr }}</p>{% endif %}</div>
+          </div>
+          {% endfor %}
         </div>
-        <div class="doc-links">
-          <a href="#" hx-post="{% url 'complaints:document_summary' d.pk %}"
-             hx-target="#doc-summary-{{ d.pk }}" hx-swap="innerHTML"
-             onclick="this.closest('.doc').querySelector('.doc-summary-box').innerHTML='<small class=muted>Reading the document and summarising&hellip; this can take up to 30 seconds.</small>';return false;">Summary</a>
-          <a href="{% url 'complaints:document' d.pk %}" target="_blank" rel="noopener">Open &#8599;</a>
-          <a href="{% url 'complaints:document' d.pk %}?download=1">Download</a>
-        </div>
+      </details>
+      {% else %}
+      <div class="stage-flat">
+        <span class="stage-title">{{ st.title }}</span>
+        <small class="stage-meta">{{ st.at|local_date }}{% if st.actor %} &middot; {{ st.actor.get_full_name|default:st.actor.username }}{% endif %}</small>
       </div>
-      <div class="doc-summary-box" id="doc-summary-{{ d.pk }}"></div>
-    </div>
+      {% endif %}
+    </li>
     {% endfor %}
-    {% empty %}
-    <p class="empty">No documents yet.</p>
-    {% endfor %}
-  </section>
-
-  <h4 class="section-title">History</h4>
-  <section>
-    <ol class="timeline">
-      {% for e in events %}
-      <li>
-        <div><strong>{{ e|event_label }}</strong> <small class="muted">{{ e.occurred_at|local_dt }} by {{ e.actor.get_full_name|default:e.actor.username }}</small></div>
-        {% with detail=e|event_detail %}{% if detail %}<div class="muted small">{{ detail }}</div>{% endif %}{% endwith %}
-      </li>
-      {% endfor %}
-    </ol>
-  </section>
+  </ol>
 </div>
