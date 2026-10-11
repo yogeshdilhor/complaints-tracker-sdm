@@ -22,6 +22,7 @@
       {% if can_analyse %}<a href="{% url 'complaints:dashboard' %}" {% if nav_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>{% endif %}
       <a href="{% url 'complaints:overdue' %}" {% if nav_page == 'overdue' %}class="active"{% endif %}>Overdue today</a>
       {% if can_analyse %}<a href="{% url 'complaints:export' %}" {% if nav_page == 'export' %}class="active"{% endif %}>Table download</a>{% endif %}
+      {% if can_analyse %}<a href="{% url 'complaints:archive' %}" {% if nav_page == 'archive' %}class="active"{% endif %}>Archive</a>{% endif %}
       {% if can_manage_logins %}<a href="{% url 'complaints:officer_logins' %}" {% if nav_page == 'officer_logins' %}class="active"{% endif %}>Officer logins</a>{% endif %}
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
     </nav>
@@ -30,6 +31,7 @@
     <form method="post" action="{% url 'logout' %}" class="logout">
       {% csrf_token %}
       <span class="user"><span class="avatar">{{ user.get_full_name|default:user.username|slice:":1" }}</span><span>{{ user.get_full_name|default:user.username }}</span></span>
+      <a class="pw-link" href="{% url 'password_change' %}">Change password</a>
       <button type="submit" class="outline secondary">Log out</button>
     </form>
   </header>

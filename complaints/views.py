@@ -8,7 +8,7 @@ from typing import Any
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.db.models import OuterRef, Subquery
+from django.db.models import OuterRef, Q, Subquery
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -24,10 +24,12 @@ from complaints.forms import (
     ComplaintFilterForm,
     EditDetailsForm,
     ExportForm,
+    FileComplaintForm,
     IntakeForm,
     IntakeUploadForm,
     NewLoginForm,
     NoteForm,
+    UnfileForm,
 )
 from complaints.models import (
     Complainant,
@@ -69,7 +71,9 @@ from complaints.workflow import (
     apply_transition,
     attach_document,
     edit_details,
+    file_complaint,
     register_complaint,
+    unfile_complaint,
 )
 from core.models import Department, Village
 from core.roles import Role
@@ -89,6 +93,8 @@ ACTION_LABELS = {
     perms.ADD_NOTE: "Add note",
     perms.EDIT_DETAILS: "Edit details",
     perms.ADD_STAGE: "Add a stage",
+    perms.FILE: "File this complaint",
+    perms.UNFILE: "Restore this complaint",
 }
 # What the "+" menu on the timeline offers, in plain words.
 MENU_LABELS = {
@@ -104,8 +110,9 @@ MENU_LABELS = {
     Action.REOPEN: "Re-open the complaint",
     perms.ADD_STAGE: "Custom stage: name it yourself",
     perms.EDIT_DETAILS: "Correct complainant details",
+    perms.FILE: "File this complaint (move to Archive)",
 }
-NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS)
+NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS, perms.FILE)
 
 
 def _pop_created_login(request: HttpRequest) -> dict | None:
@@ -121,7 +128,8 @@ def _is_htmx(request: HttpRequest) -> bool:
 
 
 def _visible_complaint(request: HttpRequest, pk: int) -> Complaint:
-    qs = perms.visible_complaints(request.user).select_related(
+    """A case the user may open. Filed ones open too (from the Archive), but only read-only."""
+    qs = perms.visible_complaints(request.user, include_filed=True).select_related(
         "complainant", "village", "category", "current_department", "office"
     )
     return get_object_or_404(qs, pk=pk)
@@ -206,6 +214,7 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
             complaint, department=user.department if _officer_only(user) else None
         ),
         "is_officer": _officer_only(user),
+        "can_unfile": perms.can(user, perms.UNFILE, complaint),
         "created_login": _pop_created_login(request),
         "actions": actions,
         "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
@@ -247,6 +256,8 @@ def _form_for(
         perms.ADD_NOTE: NoteForm,
         perms.ADD_STAGE: AddStageForm,
         perms.EDIT_DETAILS: EditDetailsForm,
+        perms.FILE: FileComplaintForm,
+        perms.UNFILE: UnfileForm,
     }
     return forms_by_name[action](*data, **kwargs)
 
@@ -321,6 +332,10 @@ def _run_action(
             add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:
             edit_details(complaint, user, **data)
+        elif action == perms.FILE:
+            file_complaint(complaint, user, data["reason"])
+        elif action == perms.UNFILE:
+            unfile_complaint(complaint, user, data.get("reason", ""))
         if staged_doc is not None and doc_summary:
             Document.objects.filter(pk=staged_doc.pk).update(summary=doc_summary[:2000])
     return credentials
@@ -374,6 +389,12 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         else:
             if not _is_htmx(request):
                 return redirect("complaints:detail", pk=pk)
+            if complaint.is_filed:
+                response = render(request, "complaints/_filed.html", {"complaint": complaint})
+                response["HX-Trigger"] = "complaintChanged"
+                response["HX-Retarget"] = "#detail-pane"
+                response["HX-Reswap"] = "innerHTML"
+                return response
             if not perms.visible_complaints(request.user).filter(pk=pk).exists():
                 # The action handed the case on (an officer's report), so it is no longer theirs.
                 response = render(request, "complaints/_handed_on.html", {"complaint": complaint})
@@ -647,6 +668,41 @@ def officer_login_action(request: HttpRequest, pk: int, action: str) -> HttpResp
     return _logins_page(request, error=error) if error else redirect("complaints:officer_logins")
 
 
+# ------------------------------------------------------------------- archive
+
+
+@login_required
+def archive(request: HttpRequest) -> HttpResponse:
+    """Filed complaints: out of every normal view, kept here for reference and download."""
+    if not perms.can_view_archive(request.user):
+        return HttpResponseForbidden("The Archive is not available on this login.")
+    filed = (
+        perms.visible_complaints(request.user, include_filed=True)
+        .filter(filed_at__isnull=False)
+        .select_related("complainant", "village", "filed_by")
+    )
+    q = request.GET.get("q", "").strip()
+    if q:
+        filed = filed.filter(
+            Q(ref_no__icontains=q)
+            | Q(subject__icontains=q)
+            | Q(external_ref__icontains=q)
+            | Q(complainant__name__icontains=q)
+            | Q(complainant__phone__icontains=q)
+            | Q(village__name__icontains=q)
+            | Q(filing_reason__icontains=q)
+        )
+    return render(
+        request,
+        "complaints/archive.html",
+        {
+            "page": paginate(filed.order_by("-filed_at", "-id"), request.GET.get("page"), 30),
+            "q": q,
+            "querystring": request.GET.copy().urlencode(),
+        },
+    )
+
+
 # ------------------------------------------------------------ notifications
 
 
@@ -692,7 +748,11 @@ def notification_open(request: HttpRequest, pk: int) -> HttpResponse:
     if note.read_at is None:
         note.read_at = timezone.now()
         note.save(update_fields=["read_at"])
-    if perms.visible_complaints(request.user).filter(pk=note.complaint_id).exists():
+    if (
+        perms.visible_complaints(request.user, include_filed=True)
+        .filter(pk=note.complaint_id)
+        .exists()
+    ):
         return redirect(f"{reverse('complaints:list')}?case={note.complaint_id}")
     return redirect("complaints:notifications")
 
@@ -729,10 +789,11 @@ def _export_selection(request: HttpRequest):
     form = ExportForm(request.GET or None, office=request.user.office)
     chosen = form.cleaned_data if form.is_valid() else {}
     queryset = export_queryset(
-        perms.visible_complaints(request.user),
+        perms.visible_complaints(request.user, include_filed=True),
         department=chosen.get("department"),
         platform=chosen.get("platform", ""),
         status=chosen.get("status", ""),
+        archive=chosen.get("archive", ""),
     )
     return form, queryset
 
@@ -770,7 +831,11 @@ def export_download(request: HttpRequest) -> HttpResponse:
 def document_download(request: HttpRequest, pk: int) -> FileResponse:
     """Files are only ever served here, after a visibility check; there is no public media URL."""
     document = get_object_or_404(Document, pk=pk, is_deleted=False)
-    if not perms.visible_complaints(request.user).filter(pk=document.complaint_id).exists():
+    if (
+        not perms.visible_complaints(request.user, include_filed=True)
+        .filter(pk=document.complaint_id)
+        .exists()
+    ):
         raise Http404
     if not perms.officer_can_see_document(request.user, document):
         raise Http404
@@ -789,7 +854,11 @@ def document_download(request: HttpRequest, pk: int) -> FileResponse:
 def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
     """A 50-75 word summary of one document, made on the first click and then kept."""
     document = get_object_or_404(Document, pk=pk, is_deleted=False)
-    if not perms.visible_complaints(request.user).filter(pk=document.complaint_id).exists():
+    if (
+        not perms.visible_complaints(request.user, include_filed=True)
+        .filter(pk=document.complaint_id)
+        .exists()
+    ):
         raise Http404
     if _officer_only(request.user):
         return HttpResponseForbidden("Summaries are not available on this login.")

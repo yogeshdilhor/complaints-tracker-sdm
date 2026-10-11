@@ -21,6 +21,7 @@ urlpatterns = [
     path("notifications/bell/", views.notification_bell, name="notification_bell"),
     path("notifications/read-all/", views.notifications_read_all, name="notifications_read_all"),
     path("notifications/<int:pk>/open/", views.notification_open, name="notification_open"),
+    path("archive/", views.archive, name="archive"),
     path("dashboard/", views.dashboard, name="dashboard"),
     path("export/", views.export_page, name="export"),
     path("export/download/", views.export_download, name="export_download"),

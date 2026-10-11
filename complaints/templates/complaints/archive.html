@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Archive - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<div class="notif-head">
+  <div>
+    <h2>Archive</h2>
+    <p class="muted small">Filed complaints. They no longer appear in the complaints list, the dashboard or the overdue page. Open one to read it; only the admin can restore it.</p>
+  </div>
+  <div class="notif-actions">
+    <a role="button" class="secondary outline" href="{% url 'complaints:export_download' %}?archive=only">Download archive (Excel)</a>
+  </div>
+</div>
+
+<form method="get" class="archive-search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search ref no, name, phone, village, reason..." autocomplete="off">
+  <button type="submit" class="secondary outline">Search</button>
+</form>
+
+<div class="table-wrap">
+  <table class="dash-table archive-table">
+    <thead><tr><th>Complaint</th><th>Complainant</th><th>Village</th><th>Portal</th><th>Filed</th><th>Reason</th></tr></thead>
+    <tbody>
+      {% for c in page %}
+      <tr>
+        <td><a href="{% url 'complaints:detail' c.pk %}"><span class="ref">{{ c.ref_no }}</span></a><br>{{ c.subject|truncatechars:60 }}</td>
+        <td>{{ c.complainant.name }}{% if c.complainant.phone %}<br><small class="muted">{{ c.complainant.phone }}</small>{% endif %}</td>
+        <td>{{ c.village|default:"-" }}</td>
+        <td>{{ c.get_source_platform_display }}</td>
+        <td>{{ c.filed_at|date:"j M Y" }}{% if c.filed_by %}<br><small class="muted">by {{ c.filed_by.get_full_name|default:c.filed_by.username }}</small>{% endif %}</td>
+        <td>{{ c.filing_reason|truncatechars:90 }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="muted">{% if q %}No filed complaint matches &ldquo;{{ q }}&rdquo;.{% else %}Nothing has been filed yet.{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pages">
+  {% if page.has_previous %}<a href="?q={{ q|urlencode }}&page={{ page.previous_page_number }}">&laquo; Newer</a>{% endif %}
+  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?q={{ q|urlencode }}&page={{ page.next_page_number }}">Older &raquo;</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

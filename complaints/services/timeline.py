@@ -96,6 +96,10 @@ def _default_description(event: Event, complaint: Complaint) -> tuple[str, str, 
             return "Resolved and filed", "ok", p.get("reason", "")
         case EventType.REOPENED:
             return "Complaint re-opened", "bad", p.get("reason", "")
+        case EventType.FILED:
+            return "Complaint filed (moved to the Archive)", "info", p.get("reason", "")
+        case EventType.UNFILED:
+            return "Restored from the Archive", "info", p.get("reason", "")
         case EventType.DOCUMENT_ATTACHED:
             kind = (p.get("kind") or "document").replace("_", " ")
             return f"Document added ({kind})", "info", ""

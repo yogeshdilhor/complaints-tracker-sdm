@@ -103,6 +103,15 @@ class ExportForm(forms.Form):
         choices=[("", "Open and closed"), ("open", "Open only"), ("closed", "Closed only")],
         required=False,
     )
+    archive = forms.ChoiceField(
+        choices=[
+            ("", "Active complaints"),
+            ("only", "Filed complaints (Archive)"),
+            ("both", "Active and filed"),
+        ],
+        required=False,
+        label="Include",
+    )
 
     def __init__(self, *args, office: Office | None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -352,6 +361,30 @@ class NewLoginForm(forms.Form):
     def __init__(self, *args, office: Office, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["department"].queryset = _active_departments(office)
+
+
+class FileComplaintForm(forms.Form):
+    """Moving a complaint to the Archive needs a reason on record."""
+
+    reason = forms.CharField(
+        widget=forms.Textarea(attrs={"rows": 3}),
+        label="Why is this complaint being filed?",
+        help_text="It leaves the normal views and goes to the Archive. It can be restored later.",
+    )
+
+    def __init__(self, *args, complaint: Complaint, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.complaint = complaint
+
+
+class UnfileForm(forms.Form):
+    reason = forms.CharField(
+        required=False, widget=forms.Textarea(attrs={"rows": 2}), label="Why restore it? (optional)"
+    )
+
+    def __init__(self, *args, complaint: Complaint, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.complaint = complaint
 
 
 class AddStageForm(forms.Form):

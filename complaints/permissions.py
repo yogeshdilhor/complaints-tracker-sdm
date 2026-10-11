@@ -15,6 +15,8 @@ ADD_NOTE = "add_note"
 EDIT_DETAILS = "edit_details"
 ADD_STAGE = "add_stage"  # a stage the user names themselves, with any documents
 MANAGE_LOGINS = "manage_logins"  # create, renew and switch off officer logins
+FILE = "file_complaint"  # move a complaint to the Archive: the admin (SDM) only
+UNFILE = "unfile_complaint"  # bring it back: the admin (SDM) only
 
 _CLERK_ACTIONS = {
     REGISTER,
@@ -36,7 +38,7 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
     Action.REOPEN,
 }
 _REVIEWER_ACTIONS |= {MANAGE_LOGINS}
-_ADMIN_ACTIONS = _REVIEWER_ACTIONS  # Admin can do everything Reviewer can
+_ADMIN_ACTIONS = _REVIEWER_ACTIONS | {FILE, UNFILE}  # ...and alone may file and restore
 
 
 _OFFICE_WIDE = {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}
@@ -46,8 +48,12 @@ def _roles(user) -> set[str]:
     return user.role_names if user.is_authenticated else set()
 
 
-def visible_complaints(user) -> QuerySet[Complaint]:
-    """Department scoping is enforced here, in the query."""
+def visible_complaints(user, include_filed: bool = False) -> QuerySet[Complaint]:
+    """Department scoping is enforced here, in the query.
+
+    Filed complaints are left out unless `include_filed` (the Archive and a filed case's own
+    page). Department officers never see filed complaints.
+    """
     if not user.is_authenticated:
         return Complaint.objects.none()
     qs = Complaint.objects.all()
@@ -55,12 +61,14 @@ def visible_complaints(user) -> QuerySet[Complaint]:
     if not user.office_id:
         return qs.none()
     qs = qs.filter(office_id=user.office_id)
-    if roles & {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}:
-        return qs
+    if roles & _OFFICE_WIDE:
+        return qs if include_filed else qs.filter(filed_at__isnull=True)
     if Role.DEPARTMENT_OFFICER in roles and user.department_id:
         # Every case ever marked to their office, for reference. What they may DO is far narrower
         # (see can()), and what they see inside a case is limited by services.timeline.
-        return qs.filter(referrals__to_department_id=user.department_id).distinct()
+        return qs.filter(
+            referrals__to_department_id=user.department_id, filed_at__isnull=True
+        ).distinct()
     return qs.none()
 
 
@@ -78,7 +86,9 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
     """
     if not user.is_authenticated:
         return False
-    if complaint is not None and not visible_complaints(user).filter(pk=complaint.pk).exists():
+    # A filed complaint is out of reach of every action except restoring it.
+    seen = visible_complaints(user, include_filed=action == UNFILE)
+    if complaint is not None and not seen.filter(pk=complaint.pk).exists():
         return False
     roles = _roles(user)
     allowed: set = set()
@@ -113,3 +123,7 @@ def officer_can_see_document(user, document) -> bool:
 
     stages = build_timeline(document.complaint, department=user.department)
     return any(document.pk == d.pk for stage in stages for d in stage.documents)
+
+
+def can_view_archive(user) -> bool:
+    return can_analyse(user)

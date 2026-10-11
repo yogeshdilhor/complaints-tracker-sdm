@@ -38,6 +38,8 @@ class EventType(models.TextChoices):
     PORTAL_REJECTED = "PORTAL_REJECTED"
     CLOSED = "CLOSED"
     REOPENED = "REOPENED"
+    FILED = "FILED"
+    UNFILED = "UNFILED"
     DOCUMENT_ATTACHED = "DOCUMENT_ATTACHED"
     DETAILS_EDITED = "DETAILS_EDITED"
     NOTE_ADDED = "NOTE_ADDED"
@@ -99,6 +101,14 @@ class Complaint(TimeStamped):
     current_stage_started_at = models.DateTimeField()
     closed_on = models.DateField(null=True, blank=True)
 
+    # "Filed" complaints are hidden from every normal view and kept in the Archive. Only the
+    # admin may file or restore one (complaints.workflow.file_complaint / unfile_complaint).
+    filed_at = models.DateTimeField(null=True, blank=True)
+    filed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    filing_reason = models.TextField(blank=True)
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
     )
@@ -129,6 +139,10 @@ class Complaint(TimeStamped):
     @property
     def is_open(self) -> bool:
         return self.current_state != State.CLOSED
+
+    @property
+    def is_filed(self) -> bool:
+        return self.filed_at is not None
 
 
 class Document(models.Model):

@@ -3,6 +3,17 @@
   <button type="button" class="back outline secondary"
           onclick="document.body.classList.remove('detail-open')">&larr; Back to list</button>
   {% include "complaints/_created_login.html" %}
+  {% if complaint.is_filed %}
+  <div class="filed-banner">
+    <div>
+      <b>Filed {{ complaint.filed_at|local_date }}</b>{% if complaint.filed_by %} by {{ complaint.filed_by.get_full_name|default:complaint.filed_by.username }}{% endif %}.
+      <span class="muted">{{ complaint.filing_reason }}</span>
+    </div>
+    {% if can_unfile %}
+    <button type="button" class="outline" hx-get="{% url 'complaints:action' complaint.pk 'unfile_complaint' %}" hx-target="#action-area">Restore</button>
+    {% endif %}
+  </div>
+  {% endif %}
   <div class="mobile-ref"><span class="ref">{{ complaint.ref_no }}</span> {{ complaint.subject }}</div>
 
   {# Only what the list card does not already say: the summary, contact details, deadlines. #}

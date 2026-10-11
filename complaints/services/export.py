@@ -14,10 +14,23 @@ from complaints.services.xlsx import Sheet, write_workbook
 
 
 def export_queryset(
-    visible: QuerySet[Complaint], *, department=None, platform: str = "", status: str = ""
+    visible: QuerySet[Complaint],
+    *,
+    department=None,
+    platform: str = "",
+    status: str = "",
+    archive: str = "",
 ) -> QuerySet[Complaint]:
-    """Complaints ever marked to `department`, from `platform`, open or closed."""
+    """Complaints ever marked to `department`, from `platform`, open or closed.
+
+    `visible` must include filed complaints; `archive` picks active (""), filed ("only") or
+    both ("both").
+    """
     qs = visible.select_related("complainant", "village", "category", "current_department")
+    if archive == "only":
+        qs = qs.filter(filed_at__isnull=False)
+    elif archive != "both":
+        qs = qs.filter(filed_at__isnull=True)
     if department is not None:
         qs = qs.filter(referrals__to_department=department).distinct()
     if platform:
@@ -99,6 +112,8 @@ def build_workbook(complaints: QuerySet[Complaint]) -> bytes:
                 ", ".join(dict.fromkeys(str(r.to_department) for r in referrals)),
                 reports,
                 latest_summary,
+                timezone.localtime(c.filed_at).strftime("%Y-%m-%d") if c.filed_at else "",
+                c.filing_reason,
             ]
         )
         for number, stage in enumerate(build_timeline(c), start=1):
@@ -145,7 +160,31 @@ def build_workbook(complaints: QuerySet[Complaint]) -> bytes:
                     "Latest report summary",
                 ],
                 summary_rows,
-                [14, 16, 16, 12, 16, 18, 10, 10, 12, 12, 20, 14, 26, 16, 14, 18, 34, 60, 22, 9, 60],
+                [
+                    14,
+                    16,
+                    16,
+                    12,
+                    16,
+                    18,
+                    10,
+                    10,
+                    12,
+                    12,
+                    20,
+                    14,
+                    26,
+                    16,
+                    14,
+                    18,
+                    34,
+                    60,
+                    22,
+                    9,
+                    60,
+                    12,
+                    34,
+                ],
             ),
             Sheet(
                 "Reports",

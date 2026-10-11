@@ -549,6 +549,41 @@ def attach_document(
     return document
 
 
+def file_complaint(complaint: Complaint, actor: Any, reason: str) -> Event:
+    """Move a complaint to the Archive: hidden from every normal view until restored."""
+    if _blank(reason):
+        raise InvalidTransitionData("A reason for filing is required.")
+    with transaction.atomic():
+        locked = Complaint.objects.select_for_update().get(pk=complaint.pk)
+        if locked.filed_at is not None:
+            raise InvalidTransition("This complaint is already filed.")
+        now = timezone.now()
+        locked.filed_at, locked.filed_by, locked.filing_reason = now, actor, reason.strip()
+        locked.save(update_fields=["filed_at", "filed_by", "filing_reason", "updated_at"])
+        event = _log(
+            locked,
+            EventType.FILED,
+            actor,
+            now,
+            {"reason": reason.strip(), "state_when_filed": locked.current_state},
+        )
+    complaint.refresh_from_db()
+    return event
+
+
+def unfile_complaint(complaint: Complaint, actor: Any, reason: str = "") -> Event:
+    """Bring a filed complaint back to the normal views."""
+    with transaction.atomic():
+        locked = Complaint.objects.select_for_update().get(pk=complaint.pk)
+        if locked.filed_at is None:
+            raise InvalidTransition("This complaint is not filed.")
+        locked.filed_at, locked.filed_by, locked.filing_reason = None, None, ""
+        locked.save(update_fields=["filed_at", "filed_by", "filing_reason", "updated_at"])
+        event = _log(locked, EventType.UNFILED, actor, timezone.now(), {"reason": reason.strip()})
+    complaint.refresh_from_db()
+    return event
+
+
 def add_stage(
     complaint: Complaint,
     actor: Any,

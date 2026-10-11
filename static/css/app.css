@@ -452,3 +452,14 @@ a.notif .n-time { white-space: nowrap; margin: .1rem 0 0; }
 .badge.login-expired { background: #fbe9e6; color: var(--bucket-critical); }
 .badge.login-off { background: #eceff4; color: var(--ink-2); }
 @media (max-width: 700px) { .new-login-form { grid-template-columns: 1fr; } }
+
+/* ---------- archive ---------- */
+.filed-banner { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; padding: .6rem .9rem; background: #eef1f6; border: 1px solid var(--line-2); border-left: 4px solid #8b95a5; border-radius: var(--radius); font-size: .88rem; }
+.filed-banner button { margin: 0; padding: .3rem .9rem; width: auto; font-size: .8rem; flex: none; }
+.archive-search { display: flex; gap: .5rem; margin-bottom: .8rem; max-width: 36rem; }
+.archive-search input { margin: 0; }
+.archive-search button { margin: 0; width: auto; }
+.archive-table td { vertical-align: top; }
+.topbar .pw-link { font-size: .78rem; white-space: nowrap; color: #aebfdc; }
+.topbar .pw-link:hover { color: #fff; }
+@media (max-width: 959px) { .topbar .pw-link { display: none; } }

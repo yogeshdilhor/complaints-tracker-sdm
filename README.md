@@ -41,6 +41,8 @@ Size it is built for: about 100 complaints a week, one office, 10-20 users. It i
 - **Upload a document.** The first item in `+ Add stage`. The document is read automatically (typed documents only; handwriting is not sent to the AI) and proposed as a stage with a title, officer, date, acknowledgement number and a 50-75 word summary. You check and edit it, then save; nothing is logged before that.
 - **Dashboard.** Office-wide analytics: weekly intake, status, departments, portals, ageing, department turnaround, ATR outcomes, villages, categories and tags. Charts are drawn by Chart.js (vendored in `static/vendor`, no CDN).
 - **Table download.** An Excel workbook (Complaints, Reports, Timeline, Documents sheets), filterable by department, portal and status. Written by `complaints/services/xlsx.py`, no extra package.
+- **Filing and the Archive.** The admin (the SDM) alone can *file* a complaint (a reason is required): it disappears from the list, dashboard and overdue page and is kept in the **Archive**, searchable and downloadable as Excel. Only the admin can restore it. Staff can open a filed case read-only; department officers never see it.
+- **Staff logins.** `python manage.py create_login --username sdm --role Admin --admin-site` makes the SDM login; `--username complaintsbranch --role Reviewer` makes the complaints-branch login, which can do everything except file or restore. The password is printed once; each user can change it from *Change password* at the top right.
 - **Resizable panes.** Drag the divider between the list and the case; the width is remembered in the browser (double-click to reset).
 
 Dashboard and Table download are for Clerk, Reviewer, Admin and Auditor; department officers see neither.
