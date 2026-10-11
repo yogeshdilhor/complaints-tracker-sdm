@@ -87,6 +87,14 @@ class User(AbstractUser):
         Department, null=True, blank=True, on_delete=models.PROTECT, related_name="officers"
     )
     phone = models.CharField(max_length=20, blank=True)
+    # Officer logins stop working after this date. Empty = never expires (staff accounts).
+    login_expires_on = models.DateField(null=True, blank=True)
+
+    @property
+    def is_login_expired(self) -> bool:
+        from django.utils import timezone
+
+        return bool(self.login_expires_on and timezone.localdate() > self.login_expires_on)
 
     def has_role(self, role: str) -> bool:
         return self.groups.filter(name=role).exists()

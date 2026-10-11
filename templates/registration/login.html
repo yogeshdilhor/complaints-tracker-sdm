@@ -9,7 +9,7 @@
   </div>
   <form method="post">
     {% csrf_token %}
-    {% if form.errors %}<p class="error" role="alert">Wrong username or password.</p>{% endif %}
+    {% if form.errors %}<p class="error" role="alert">Wrong username or password, or the login has expired. Officer logins last a month; ask the SDM office for a new one.</p>{% endif %}
     <label>Username {{ form.username }}</label>
     <label>Password {{ form.password }}</label>
     <input type="hidden" name="next" value="{{ next }}">

@@ -430,3 +430,25 @@ a.notif .n-time { white-space: nowrap; margin: .1rem 0 0; }
 .bell-panel a.bell-all { color: var(--accent); }
 .bell-panel li a:hover .n-title { color: var(--accent); }
 .attention li, .bell-panel li { list-style: none; }
+
+/* ---------- officer logins ---------- */
+.cred { margin: 0 0 1rem; padding: .8rem 1rem; background: #fff8e6; border: 1px solid #f0d28a; border-radius: var(--radius); }
+.cred-title { margin: 0 0 .4rem; }
+.cred dl { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: 0 0 .5rem; font-size: .9rem; }
+.cred dt { color: var(--muted-ink); }
+.cred dd { margin: 0; }
+.cred code { padding: .1rem .5rem; background: #fff; border: 1px solid #ecd9a4; font-size: 1rem; letter-spacing: .04em; user-select: all; }
+.cred button { margin: .3rem 0 0; padding: .3rem .9rem; width: auto; font-size: .8rem; }
+.new-login { max-width: 100%; margin-bottom: 1rem; padding: .8rem 1rem; }
+.new-login h4 { margin-bottom: .5rem; }
+.new-login-form { display: grid; grid-template-columns: 1.4fr 1.4fr 1fr auto; gap: .6rem; align-items: end; margin: 0; }
+.new-login-form label { margin: 0; font-size: .8rem; color: var(--ink-2); }
+.new-login-form button { margin: 0; width: auto; padding: .45rem 1rem; font-size: .85rem; }
+.logins td { vertical-align: top; }
+.row-actions { white-space: nowrap; }
+.row-actions form { display: inline; margin: 0 .5rem 0 0; }
+.linklike.danger { color: var(--bucket-critical); }
+.badge.login-active { background: #e3f2e8; color: #226a3f; }
+.badge.login-expired { background: #fbe9e6; color: var(--bucket-critical); }
+.badge.login-off { background: #eceff4; color: var(--ink-2); }
+@media (max-width: 700px) { .new-login-form { grid-template-columns: 1fr; } }

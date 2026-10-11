@@ -66,13 +66,15 @@ def test_department_officer_sees_only_cases_currently_with_their_department(
     assert list(perms.visible_complaints(officer)) == [with_tehsildar]
 
 
-def test_officer_loses_sight_once_the_case_leaves_their_department(
-    officer, with_tehsildar, clerk, make_document
+def test_officer_keeps_seeing_every_case_marked_to_them_even_after_reporting(
+    officer, with_tehsildar, with_bdpo, clerk, make_document
 ):
     apply_transition(
         with_tehsildar, Action.RECORD_REPORT, clerk, document=make_document(with_tehsildar)
     )
-    assert list(perms.visible_complaints(officer)) == []
+    assert list(perms.visible_complaints(officer)) == [with_tehsildar]  # not the BDPO's case
+    # ...but can no longer do anything to it
+    assert not perms.can(officer, Action.RECORD_REPORT, with_tehsildar)
 
 
 def test_user_without_role_or_login_sees_nothing(office, complaint):

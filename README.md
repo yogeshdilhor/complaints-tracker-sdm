@@ -71,7 +71,7 @@ Each role is a Django group created by a migration.
 | Role | Can do |
 | --- | --- |
 | Clerk | Register, edit, add notes and files, issue and reissue notices, record reports, submit to the portal, record portal accepted or rejected |
-| DepartmentOfficer | See only complaints currently marked to their own unit. The only thing they can do is upload their report (a file is required); once they do, the case leaves their view |
+| DepartmentOfficer | A view-only login for one office or department, made by the SDM (Reviewer or Admin) when marking a complaint, or on the Officer logins page. Sees every complaint ever marked to their office, but only the stages and documents that concern it. The one thing they can do is upload their report while a case is waiting for it. Logins expire after 30 days |
 | Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen |
 | Admin | Everything a Reviewer can, plus master data and users in the Django admin (`/admin/`; the user needs "staff status") |
 | Auditor | Read-only |
@@ -201,6 +201,8 @@ All configuration is through environment variables, read from `.env` if present.
 | `SARVAM_API_KEY`, `SARVAM_MODEL` | empty, `sarvam-105b` | Sarvam key and model |
 | `SARVAM_REASONING_EFFORT` | `off` | `off` turns Sarvam's thinking off (cheaper, enough for summaries); or `low`, `medium`, `high` |
 | `TYPED_MIN_OCR_CONFIDENCE` | `70` | Scanned pages read below this confidence (0-100) count as handwriting and are not sent to the AI |
+| `OFFICER_LOGIN_DAYS` | `30` | How long a new officer login lasts, and how far "+30 days" extends it |
+| `MAX_OFFICER_LOGINS` | `0` | Most officer logins that may be active at once; `0` means no limit |
 
 Values kept in `config/settings/base.py`: `PLATFORM_SLA_DAYS` (a portal's own deadline, e.g. Samadhan Shivir 7 days; it can only shorten a unit's SLA), `AGEING_THRESHOLDS` (0 safe, 3 warning, 7 overdue, 10 critical days), `PAGE_SIZE` (25), `MAX_UPLOAD_BYTES` (10 MB; PDF, JPG, PNG only), `INTAKE_OCR_MAX_PAGES` (6).
 

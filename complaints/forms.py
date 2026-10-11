@@ -186,6 +186,15 @@ class ActionForm(forms.Form):
         self.fields["headline"] = _headline_field(complaint, _ACTION_OF_FORM.get(type(self)))
         self.order_fields(["department", "headline"])
         if "department" in self.fields:
+            self.fields["create_login"] = forms.BooleanField(
+                required=False,
+                label="Also create a login for this officer (valid for a month)",
+            )
+            self.fields["officer_name"] = forms.CharField(
+                required=False,
+                max_length=150,
+                label="Officer's name (shown on the login, optional)",
+            )
             departments = _active_departments(complaint.office)
             field = self.fields["department"]
             self._department_required = field.required
@@ -329,6 +338,20 @@ class NoteForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
         self.fields["headline"] = _headline_field(complaint, "add_note")
+
+
+class NewLoginForm(forms.Form):
+    """A login for an officer, made without marking a complaint."""
+
+    department = forms.ModelChoiceField(
+        queryset=Department.objects.none(), label="Office or department"
+    )
+    name = forms.CharField(required=False, max_length=150, label="Officer's name (optional)")
+    phone = forms.CharField(required=False, max_length=20, label="Officer's phone (optional)")
+
+    def __init__(self, *args, office: Office, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["department"].queryset = _active_departments(office)
 
 
 class AddStageForm(forms.Form):

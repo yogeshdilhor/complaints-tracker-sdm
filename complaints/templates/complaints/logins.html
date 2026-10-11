@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Officer logins - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<div class="notif-head">
+  <div>
+    <h2>Officer logins</h2>
+    <p class="muted small">A login lets a department officer see the complaints marked to them and upload their report &mdash; nothing else. Each lasts {{ days }} days.
+      {% if limit %}<b>{{ active_count }} of {{ limit }}</b> active logins in use.{% else %}<b>{{ active_count }}</b> active; no limit is set.{% endif %}</p>
+  </div>
+</div>
+
+{% include "complaints/_created_login.html" %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<article class="new-login">
+  <h4>Create a login</h4>
+  <form method="post" action="{% url 'complaints:officer_login_new' %}" class="new-login-form">
+    {% csrf_token %}
+    <label>{{ form.department.label }} {{ form.department }}</label>
+    <label>{{ form.name.label }} {{ form.name }}</label>
+    <label>{{ form.phone.label }} {{ form.phone }}</label>
+    <button type="submit">Create login</button>
+  </form>
+  <p class="muted small">You can also make one while marking a complaint: tick &ldquo;Also create a login for this officer&rdquo;.</p>
+</article>
+
+<div class="table-wrap">
+  <table class="dash-table logins">
+    <thead><tr><th>Office</th><th>Officer</th><th>Username</th><th>Status</th><th>Valid until</th><th>Last signed in</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.user.department }}</td>
+        <td>{{ r.user.first_name }}{% if r.user.phone %}<br><small class="muted">{{ r.user.phone }}</small>{% endif %}</td>
+        <td><code>{{ r.user.username }}</code></td>
+        <td><span class="badge login-{{ r.state }}">{% if r.state == "active" %}Active{% elif r.state == "expired" %}Expired{% else %}Switched off{% endif %}</span></td>
+        <td>{{ r.user.login_expires_on|date:"j M Y"|default:"-" }}{% if r.state == "active" and r.days_left is not None %}<br><small class="muted">{{ r.days_left }} day{{ r.days_left|pluralize }} left</small>{% endif %}</td>
+        <td>{{ r.user.last_login|date:"j M Y, H:i"|default:"Never" }}</td>
+        <td class="row-actions">
+          <form method="post" action="{% url 'complaints:officer_login_action' r.user.pk 'extend' %}">{% csrf_token %}<button class="linklike">+{{ days }} days</button></form>
+          <form method="post" action="{% url 'complaints:officer_login_action' r.user.pk 'reset' %}" onsubmit="return confirm('Make a new password? The old one stops working.')">{% csrf_token %}<button class="linklike">New password</button></form>
+          {% if r.user.is_active %}
+          <form method="post" action="{% url 'complaints:officer_login_action' r.user.pk 'off' %}" onsubmit="return confirm('Switch this login off now?')">{% csrf_token %}<button class="linklike danger">Switch off</button></form>
+          {% else %}
+          <form method="post" action="{% url 'complaints:officer_login_action' r.user.pk 'on' %}">{% csrf_token %}<button class="linklike">Switch on</button></form>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7" class="muted">No officer logins yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

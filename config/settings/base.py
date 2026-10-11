@@ -29,6 +29,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "core.middleware.ExpiredLoginMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -57,6 +58,11 @@ DATABASES = {"default": env.db("DATABASE_URL")}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "core.User"
+AUTHENTICATION_BACKENDS = ["core.backends.ExpiringModelBackend"]
+# Logins made for department officers last this many days, then stop working.
+OFFICER_LOGIN_DAYS = env.int("OFFICER_LOGIN_DAYS", default=30)
+# Most officer logins that can be active at once; 0 = no limit.
+MAX_OFFICER_LOGINS = env.int("MAX_OFFICER_LOGINS", default=0)
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

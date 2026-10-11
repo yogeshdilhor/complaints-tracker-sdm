@@ -1,0 +1,12 @@
+{% if created_login %}
+<div class="cred" role="status">
+  <p class="cred-title"><b>Login created for {{ created_login.department }}</b>{% if created_login.name and created_login.name != created_login.department %} ({{ created_login.name }}){% endif %}</p>
+  <dl>
+    <dt>Username</dt><dd><code class="cred-user">{{ created_login.username }}</code></dd>
+    <dt>Password</dt><dd><code class="cred-password">{{ created_login.password }}</code></dd>
+    <dt>Valid until</dt><dd>{{ created_login.expires_on|date:"j M Y" }}</dd>
+  </dl>
+  <p class="small">Note this down and give it to the officer now. <b>The password is not shown again</b>; if it is lost, make a new one on the Officer logins page.</p>
+  <button type="button" class="outline" onclick="var t='Complaint Tracker login\nAddress: '+location.origin+'\nUsername: {{ created_login.username }}\nPassword: {{ created_login.password }}\nValid until: {{ created_login.expires_on|date:"j M Y" }}';navigator.clipboard.writeText(t).then(()=>{this.textContent='Copied'})">Copy login details</button>
+</div>
+{% endif %}

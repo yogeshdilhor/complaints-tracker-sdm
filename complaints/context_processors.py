@@ -23,6 +23,7 @@ def nav(request):
     context = {
         "can_register": permissions.can(user, permissions.REGISTER),
         "can_analyse": permissions.can_analyse(user),
+        "can_manage_logins": permissions.can(user, permissions.MANAGE_LOGINS),
         "admin_index_url": reverse("admin:index") if user.is_staff else "",
     } | bell_context(user)
 

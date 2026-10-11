@@ -34,11 +34,18 @@ class CategoryAdmin(admin.ModelAdmin):
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     fieldsets = DjangoUserAdmin.fieldsets + (
-        ("Office", {"fields": ("office", "department", "phone")}),
+        ("Office", {"fields": ("office", "department", "phone", "login_expires_on")}),
     )
     add_fieldsets = DjangoUserAdmin.add_fieldsets + (
         ("Office", {"fields": ("office", "department", "phone")}),
     )
-    list_display = ("username", "get_full_name", "office", "department", "is_active")
+    list_display = (
+        "username",
+        "get_full_name",
+        "office",
+        "department",
+        "is_active",
+        "login_expires_on",
+    )
     list_filter = ("office", "department", "groups", "is_active")
     search_fields = ("username", "first_name", "last_name", "phone")

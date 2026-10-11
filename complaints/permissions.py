@@ -14,6 +14,7 @@ ATTACH_DOCUMENT = "attach_document"
 ADD_NOTE = "add_note"
 EDIT_DETAILS = "edit_details"
 ADD_STAGE = "add_stage"  # a stage the user names themselves, with any documents
+MANAGE_LOGINS = "manage_logins"  # create, renew and switch off officer logins
 
 _CLERK_ACTIONS = {
     REGISTER,
@@ -34,6 +35,7 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
     Action.CLOSE_WITHOUT_PORTAL,
     Action.REOPEN,
 }
+_REVIEWER_ACTIONS |= {MANAGE_LOGINS}
 _ADMIN_ACTIONS = _REVIEWER_ACTIONS  # Admin can do everything Reviewer can
 
 
@@ -56,7 +58,9 @@ def visible_complaints(user) -> QuerySet[Complaint]:
     if roles & {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}:
         return qs
     if Role.DEPARTMENT_OFFICER in roles and user.department_id:
-        return qs.filter(current_department_id=user.department_id)
+        # Every case ever marked to their office, for reference. What they may DO is far narrower
+        # (see can()), and what they see inside a case is limited by services.timeline.
+        return qs.filter(referrals__to_department_id=user.department_id).distinct()
     return qs.none()
 
 
@@ -98,3 +102,14 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
 def allowed_actions(user, complaint: Complaint) -> list[str]:
     """State-valid actions the user may take, for rendering buttons."""
     return [str(a) for a in available_actions(complaint) if can(user, a, complaint)]
+
+
+def officer_can_see_document(user, document) -> bool:
+    """Officers may open only the documents on the stages they can see: the complaint itself,
+    notices to them, and their own reports. Everyone else with access to the case sees all."""
+    if Role.DEPARTMENT_OFFICER not in _roles(user) or _roles(user) & _OFFICE_WIDE:
+        return True
+    from complaints.services.timeline import build_timeline
+
+    stages = build_timeline(document.complaint, department=user.department)
+    return any(document.pk == d.pk for stage in stages for d in stage.documents)

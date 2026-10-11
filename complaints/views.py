@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Any
 
@@ -25,6 +26,7 @@ from complaints.forms import (
     ExportForm,
     IntakeForm,
     IntakeUploadForm,
+    NewLoginForm,
     NoteForm,
 )
 from complaints.models import (
@@ -37,7 +39,7 @@ from complaints.models import (
     State,
     Tag,
 )
-from complaints.services import intake, llm
+from complaints.services import intake, llm, logins
 from complaints.services import notifications as notification_service
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
@@ -104,6 +106,14 @@ MENU_LABELS = {
     perms.EDIT_DETAILS: "Correct complainant details",
 }
 NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS)
+
+
+def _pop_created_login(request: HttpRequest) -> dict | None:
+    """The login made a moment ago, to show once: the password is not kept anywhere."""
+    saved = request.session.pop(CREATED_LOGIN_KEY, None)
+    if saved:
+        saved["expires_on"] = date.fromisoformat(saved["expires_on"])
+    return saved
 
 
 def _is_htmx(request: HttpRequest) -> bool:
@@ -192,7 +202,11 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
     return {
         "complaint": complaint,
         "summary": build_summary(complaint),
-        "timeline": build_timeline(complaint),
+        "timeline": build_timeline(
+            complaint, department=user.department if _officer_only(user) else None
+        ),
+        "is_officer": _officer_only(user),
+        "created_login": _pop_created_login(request),
         "actions": actions,
         "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
         "total_age": total_age_days(complaint),
@@ -245,14 +259,18 @@ def _officer_only(user) -> bool:
 
 def _run_action(
     action: str, complaint: Complaint, user, form, *, staged=None, doc_summary: str = ""
-) -> None:
+) -> logins.Credentials | None:
     """Perform the action inside one transaction; raises TransitionError / DuplicateDocument.
 
     `staged` is a document already uploaded and read in the "upload a document" flow; it
     becomes part of this stage, with `doc_summary` (as confirmed by the user) kept on it.
     """
     data = form.cleaned_data
+    wants_login = bool(data.get("create_login")) and action in ACTION_FORMS
+    credentials = None
     with transaction.atomic():
+        if wants_login:
+            logins.check_room(complaint.office)
         staged_doc = None
         if action in ACTION_FORMS:
             payload = form.transition_data()
@@ -273,6 +291,15 @@ def _run_action(
                     extras.append(staged_doc)
             payload["extra_documents"] = extras
             apply_transition(complaint, action, user, **payload)
+            if wants_login:
+                officer_office = complaint.current_department
+                if officer_office is None:
+                    raise TransitionError(
+                        "A login can only be made when the case is marked to an officer."
+                    )
+                credentials = logins.create_officer_login(
+                    officer_office, data.get("officer_name", "")
+                )
         elif action == perms.ATTACH_DOCUMENT:
             attach_document(
                 complaint,
@@ -296,6 +323,7 @@ def _run_action(
             edit_details(complaint, user, **data)
         if staged_doc is not None and doc_summary:
             Document.objects.filter(pk=staged_doc.pk).update(summary=doc_summary[:2000])
+    return credentials
 
 
 @login_required
@@ -313,6 +341,8 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
     form = _form_for(action, request, complaint)
     if request.POST.get("staged"):
         form.fields.pop("file", None)  # the document was already uploaded
+    if "create_login" in form.fields and not perms.can(request.user, perms.MANAGE_LOGINS):
+        del form.fields["create_login"], form.fields["officer_name"]
     if action == Action.RECORD_REPORT and _officer_only(request.user):
         # A department officer must attach the report itself; the date is always today.
         form.fields["file"].required = True
@@ -323,7 +353,7 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         error = "The uploaded document has expired. Please upload it again."
     elif request.method == "POST" and form.is_valid():
         try:
-            _run_action(
+            credentials = _run_action(
                 action,
                 complaint,
                 request.user,
@@ -333,6 +363,10 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
             )
             if staged is not None:
                 request.session.pop(STAGE_SESSION_KEY, None)
+            if credentials is not None:
+                request.session[CREATED_LOGIN_KEY] = asdict(credentials)
+        except logins.LoginLimitReached as exc:
+            error = str(exc)
         except DuplicateDocument as exc:
             error = f"{exc} ({exc.existing.original_filename})"
         except TransitionError as exc:
@@ -374,6 +408,7 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
 # -------------------------------------------- stage from an uploaded document
 
 STAGE_SESSION_KEY = "stage_doc"
+CREATED_LOGIN_KEY = "created_login"
 
 
 def _staged_attachment(request: HttpRequest, complaint: Complaint, sha: str):
@@ -518,6 +553,8 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         unbound=True,
     )
     form.fields.pop("file", None)
+    if "create_login" in form.fields and not perms.can(request.user, perms.MANAGE_LOGINS):
+        del form.fields["create_login"], form.fields["officer_name"]
     context = {
         "complaint": complaint,
         "form": form,
@@ -529,6 +566,85 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         "ai_used": bool(ai),
     } | _staged_context(request, complaint, chosen, meta["sha"], ai.get("summary", ""))
     return render(request, "complaints/_action_form.html", context)
+
+
+# ------------------------------------------------------------------ officer logins
+
+
+def _logins_page(request: HttpRequest, form: NewLoginForm | None = None, **extra) -> HttpResponse:
+    office = request.user.office
+    today = timezone.localdate()
+    rows = []
+    for u in logins.officer_logins(office).order_by("department__short_name", "username"):
+        state = "off" if not u.is_active else "expired" if u.is_login_expired else "active"
+        days_left = (u.login_expires_on - today).days if u.login_expires_on else None
+        rows.append({"user": u, "state": state, "days_left": days_left})
+    limit = settings.MAX_OFFICER_LOGINS
+    return render(
+        request,
+        "complaints/logins.html",
+        {
+            "rows": rows,
+            "form": form or NewLoginForm(office=office),
+            "active_count": logins.active_logins(office).count(),
+            "limit": limit,
+            "created_login": _pop_created_login(request),
+            "days": settings.OFFICER_LOGIN_DAYS,
+        }
+        | extra,
+    )
+
+
+def _login_manager(request: HttpRequest) -> HttpResponse | None:
+    if not perms.can(request.user, perms.MANAGE_LOGINS):
+        return HttpResponseForbidden("Only the SDM and the admin can manage officer logins.")
+    return None
+
+
+@login_required
+def officer_logins(request: HttpRequest) -> HttpResponse:
+    return _login_manager(request) or _logins_page(request)
+
+
+@login_required
+@require_http_methods(["POST"])
+def officer_login_new(request: HttpRequest) -> HttpResponse:
+    if denied := _login_manager(request):
+        return denied
+    form = NewLoginForm(request.POST, office=request.user.office)
+    if not form.is_valid():
+        return _logins_page(request, form)
+    try:
+        credentials = logins.create_officer_login(
+            form.cleaned_data["department"], form.cleaned_data["name"], form.cleaned_data["phone"]
+        )
+    except logins.LoginLimitReached as exc:
+        return _logins_page(request, form, error=str(exc))
+    request.session[CREATED_LOGIN_KEY] = asdict(credentials)
+    return redirect("complaints:officer_logins")
+
+
+@login_required
+@require_http_methods(["POST"])
+def officer_login_action(request: HttpRequest, pk: int, action: str) -> HttpResponse:
+    if denied := _login_manager(request):
+        return denied
+    user = get_object_or_404(logins.officer_logins(request.user.office), pk=pk)
+    error = ""
+    if action == "reset":
+        request.session[CREATED_LOGIN_KEY] = asdict(logins.reset_password(user))
+    elif action == "extend":
+        logins.extend(user)
+    elif action == "off":
+        logins.switch_off(user)
+    elif action == "on":
+        try:
+            logins.switch_on(request.user.office, user)
+        except logins.LoginLimitReached as exc:
+            error = str(exc)
+    else:
+        raise Http404
+    return _logins_page(request, error=error) if error else redirect("complaints:officer_logins")
 
 
 # ------------------------------------------------------------ notifications
@@ -656,6 +772,8 @@ def document_download(request: HttpRequest, pk: int) -> FileResponse:
     document = get_object_or_404(Document, pk=pk, is_deleted=False)
     if not perms.visible_complaints(request.user).filter(pk=document.complaint_id).exists():
         raise Http404
+    if not perms.officer_can_see_document(request.user, document):
+        raise Http404
     response = FileResponse(
         document.file.open("rb"),
         content_type=document.mime_type,
@@ -673,6 +791,8 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
     document = get_object_or_404(Document, pk=pk, is_deleted=False)
     if not perms.visible_complaints(request.user).filter(pk=document.complaint_id).exists():
         raise Http404
+    if _officer_only(request.user):
+        return HttpResponseForbidden("Summaries are not available on this login.")
     error = ""
     if not document.summary:
         if not document.extracted_text:  # reports are uploaded without being read; read now

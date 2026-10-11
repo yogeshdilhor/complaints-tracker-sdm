@@ -307,13 +307,15 @@ def test_department_officer_can_only_upload_a_report_on_own_case(
 
     upload = SimpleUploadedFile("report.pdf", b"%PDF-1.4 officer report", "application/pdf")
     ok = login(officer).post(action_url(awaiting, "record_report"), {"file": upload}, **HX)
-    assert ok.status_code == 200 and "Report submitted" in ok.content.decode()
+    assert ok.status_code == 200 and "report filed" in ok.content.decode()
     assert ok["HX-Trigger"] == "complaintChanged"
     awaiting.refresh_from_db()
     assert awaiting.current_state == State.UNDER_REVIEW
     assert awaiting.documents.filter(kind="inquiry_report", uploaded_by=officer).count() == 1
-    # The case has left their unit, so it has disappeared for them entirely.
-    assert login(officer).get(reverse("complaints:detail", args=[awaiting.pk])).status_code == 404
+    # The case stays visible to them for reference, but they can do nothing more to it.
+    page = login(officer).get(reverse("complaints:detail", args=[awaiting.pk]))
+    assert page.status_code == 200 and 'add-menu"' not in page.content.decode().split("<main")[1]
+    assert login(officer).get(action_url(awaiting, "record_report"), **HX).status_code == 403
 
 
 def test_unknown_action_is_404(login, clerk, complaint):

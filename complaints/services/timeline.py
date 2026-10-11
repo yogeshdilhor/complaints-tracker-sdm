@@ -6,7 +6,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from complaints.models import Complaint, Document, Event, EventType, Platform
+from complaints.models import (
+    Complaint,
+    Document,
+    Event,
+    EventType,
+    InquiryReport,
+    Platform,
+    Referral,
+)
 
 # Payload keys that point at a document, per event type.
 _DOCUMENT_KEYS = ("document_id", "notice_document_id")
@@ -102,8 +110,44 @@ def _default_description(event: Event, complaint: Complaint) -> tuple[str, str, 
     return event.get_type_display(), "info", ""
 
 
-def build_timeline(complaint: Complaint) -> list[Stage]:
-    """Oldest first. Documents no event points at go in a closing "Other documents" stage."""
+def _stages_for_department(complaint: Complaint, department) -> set[int]:
+    """Ids of the events that concern `department`: its notices, its reports, and the verdicts
+    on them. Everything else (other departments, notes, portals) is none of its business."""
+    referrals = set(
+        Referral.objects.filter(complaint=complaint, to_department=department).values_list(
+            "pk", flat=True
+        )
+    )
+    reports = set(
+        InquiryReport.objects.filter(referral_id__in=referrals).values_list("pk", flat=True)
+    )
+    allowed: set[int] = set()
+    for event in complaint.events.all():
+        p = event.payload
+        match event.type:
+            case EventType.COMPLAINT_REGISTERED:
+                allowed.add(event.pk)
+            case EventType.NOTICE_ISSUED | EventType.REPORT_RECEIVED:
+                if p.get("referral_id") in referrals:
+                    allowed.add(event.pk)
+            case EventType.REVIEW_SATISFIED:
+                if p.get("report_id") in reports:
+                    allowed.add(event.pk)
+            case EventType.REVIEW_NOT_SATISFIED:
+                if (
+                    p.get("report_id") in reports
+                    or (p.get("new_referral") or {}).get("referral_id") in referrals
+                ):
+                    allowed.add(event.pk)
+    return allowed
+
+
+def build_timeline(complaint: Complaint, department=None) -> list[Stage]:
+    """Oldest first. Documents no event points at go in a closing "Other documents" stage.
+
+    With `department`, only the stages that concern that department (for an officer's login).
+    """
+    visible_events = _stages_for_department(complaint, department) if department else None
     documents = {
         d.pk: d
         for d in complaint.documents.filter(is_deleted=False)
@@ -112,10 +156,15 @@ def build_timeline(complaint: Complaint) -> list[Stage]:
     }
     stages: list[Stage] = []
     for event in complaint.events.select_related("actor"):
+        if visible_events is not None and event.pk not in visible_events:
+            continue
         title, tone, detail = describe_event(event, complaint)
         attached = [documents.pop(i) for i in _document_ids(event) if i in documents]
         stages.append(Stage(title, event.occurred_at, event.actor, tone, detail, attached))
-    if documents:
+    if department is not None and stages:
+        # The complaint's own paper belongs to the first stage, linked by an event or not.
+        stages[0].documents += [d for d in documents.values() if d.kind == Document.Kind.COMPLAINT]
+    if documents and department is None:
         leftover = sorted(documents.values(), key=lambda d: d.uploaded_at)
         stages.append(
             Stage("Other documents", leftover[-1].uploaded_at, None, "info", "", leftover)
