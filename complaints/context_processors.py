@@ -3,6 +3,7 @@ from django.urls import reverse
 from complaints import permissions
 from complaints.models import Notification
 from complaints.services.notifications import unread_count
+from core.roles import Role
 
 BELL_ITEMS = 6
 GREET_ON = {"list", "dashboard", "overdue", "export"}
@@ -16,6 +17,20 @@ def bell_context(user) -> dict:
     return {"notif_unread": unread_count(user), "notif_recent": recent}
 
 
+ROLE_LABELS = [
+    (Role.ADMIN, "Admin (SDM)"),
+    (Role.REVIEWER, "Complaints branch"),
+    (Role.CLERK, "Clerk"),
+    (Role.AUDITOR, "Auditor"),
+    (Role.DEPARTMENT_OFFICER, "Department officer"),
+]
+
+
+def role_label(user) -> str:
+    roles = user.role_names
+    return next((label for role, label in ROLE_LABELS if role in roles), "")
+
+
 def nav(request):
     user = request.user
     if not user.is_authenticated:
@@ -23,6 +38,7 @@ def nav(request):
     context = {
         "can_register": permissions.can(user, permissions.REGISTER),
         "can_analyse": permissions.can_analyse(user),
+        "user_role_label": role_label(user),
         "can_manage_logins": permissions.can(user, permissions.MANAGE_LOGINS),
         "admin_index_url": reverse("admin:index") if user.is_staff else "",
     } | bell_context(user)

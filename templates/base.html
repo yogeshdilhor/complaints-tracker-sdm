@@ -28,12 +28,27 @@
     </nav>
     {% include "complaints/_bell.html" %}
     {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
-    <form method="post" action="{% url 'logout' %}" class="logout">
-      {% csrf_token %}
-      <span class="user"><span class="avatar">{{ user.get_full_name|default:user.username|slice:":1" }}</span><span>{{ user.get_full_name|default:user.username }}</span></span>
-      <a class="pw-link" href="{% url 'password_change' %}">Change password</a>
-      <button type="submit" class="outline secondary">Log out</button>
-    </form>
+    <div class="user-menu">
+      <details>
+        <summary aria-label="Account menu" title="{{ user.get_full_name|default:user.username }}">
+          <span class="avatar">{{ user.get_full_name|default:user.username|slice:":1" }}</span>
+          <span class="user-name">{{ user.get_full_name|default:user.username }}</span>
+          <svg class="chev" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+        </summary>
+        <div class="user-panel">
+          <div class="user-who">
+            <b>{{ user.get_full_name|default:user.username }}</b>
+            <small>{{ user_role_label }}{% if user.department %} &middot; {{ user.department }}{% endif %}</small>
+            <small class="muted">Signed in as {{ user.username }}</small>
+          </div>
+          <a href="{% url 'password_change' %}">Change password</a>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit">Log out</button>
+          </form>
+        </div>
+      </details>
+    </div>
   </header>
   <div id="progress" aria-hidden="true"></div>
   {% if notif_greeting %}
@@ -107,8 +122,8 @@
         if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change', { bubbles: true })); }
       });
 
-      // Dropdowns (the bell, "+ Add stage") close when you click anywhere else or press Esc.
-      var DROPDOWNS = '.bell details, .add-menu';
+      // Dropdowns (the bell, the account menu, "+ Add stage") close when you click anywhere else or press Esc.
+      var DROPDOWNS = '.bell details, .user-menu details, .add-menu';
       function closeDropdowns(except) {
         document.querySelectorAll(DROPDOWNS).forEach(function (d) {
           if (d !== except && d.open) { d.open = false; }

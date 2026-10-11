@@ -265,3 +265,41 @@ def test_password_change_page(client, sdm):
     assert response.status_code == 302
     assert get_user_model().objects.get(pk=sdm.pk).check_password("A-new-pass-9876")
     assert Platform.CM_WINDOW  # keeps the import used
+
+
+# ------------------------------------------------------------------ the account menu
+
+
+def test_the_account_menu_holds_change_password_and_log_out(client, sdm):
+    client.force_login(sdm)
+    html = client.get(reverse("complaints:list")).content.decode()
+    menu = html.split('class="user-menu"')[1].split("</details>")[0]
+    assert "Change password" in menu and "Log out" in menu
+    assert reverse("password_change") in menu and reverse("logout") in menu
+    assert "Admin (SDM)" in menu and f"Signed in as {sdm.username}" in menu
+    # and they are no longer loose in the top bar
+    bar = html.split('<header class="topbar">')[1].split("</header>")[0]
+    assert bar.count("Log out") == 1 and bar.count("Change password") == 1
+
+
+def test_the_menu_names_the_role(client, reviewer, officer, tehsildar):
+    client.force_login(reviewer)
+    assert "Complaints branch" in client.get(reverse("complaints:list")).content.decode()
+    client.force_login(officer)
+    html = client.get(reverse("complaints:list")).content.decode()
+    assert "Department officer" in html and "Tehsildar" in html
+
+
+def test_logging_out_from_the_menu_works(client, sdm):
+    client.force_login(sdm)
+    response = client.post(reverse("logout"))
+    assert response.status_code == 302
+    assert client.get(reverse("complaints:list")).status_code == 302
+
+
+def test_the_stylesheet_has_balanced_braces():
+    """One stray brace silently swallows every rule after it, so check it."""
+    from pathlib import Path
+
+    css = Path("static/css/app.css").read_text()
+    assert css.count("{") == css.count("}")
