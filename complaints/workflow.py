@@ -27,6 +27,7 @@ from complaints.models import (
     State,
 )
 from complaints.services import documents as doc_service
+from complaints.services import notifications
 from complaints.services.pendency import sla_days
 from core.models import Department, Office
 
@@ -194,7 +195,7 @@ def _reset_review(report: InquiryReport | None) -> dict[str, Any]:
 def _log(
     complaint: Complaint, type_: EventType, actor: Any, at: datetime, payload: dict[str, Any]
 ) -> Event:
-    return Event.objects.create(
+    event = Event.objects.create(
         office_id=complaint.office_id,
         complaint=complaint,
         type=type_,
@@ -202,6 +203,8 @@ def _log(
         occurred_at=at,
         payload=payload,
     )
+    notifications.notify_event(event, complaint)
+    return event
 
 
 # --------------------------------------------------------------- handlers

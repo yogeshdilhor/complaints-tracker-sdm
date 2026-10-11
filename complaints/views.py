@@ -15,6 +15,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from complaints import permissions as perms
+from complaints.context_processors import bell_context
 from complaints.forms import (
     ACTION_FORMS,
     AddStageForm,
@@ -30,12 +31,14 @@ from complaints.models import (
     Complainant,
     Complaint,
     Document,
+    Notification,
     PortalSubmission,
     Referral,
     State,
     Tag,
 )
 from complaints.services import intake, llm
+from complaints.services import notifications as notification_service
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
     extract_complaint_fields,
@@ -44,6 +47,7 @@ from complaints.services.description_summary import (
 )
 from complaints.services.documents import DuplicateDocument, extract, store_document
 from complaints.services.export import build_workbook, export_queryset
+from complaints.services.notifications import attention_items
 from complaints.services.pendency import (
     BUCKET_ORDER,
     ageing_bucket,
@@ -124,6 +128,14 @@ def _decorate(complaint: Complaint) -> Complaint:
 # --------------------------------------------------------------------- list
 
 
+def _case_to_open(request: HttpRequest, visible) -> int | None:
+    """?case=<id> (from a notification): open that case in the right-hand panel."""
+    raw = request.GET.get("case", "")
+    if not raw.isdigit() or _is_htmx(request):
+        return None
+    return int(raw) if visible.filter(pk=int(raw)).exists() else None
+
+
 def _kpi_items(kpi: dict[str, int]) -> list[dict[str, Any]]:
     """The stat strip, most severe first; the ageing ones filter the list when clicked."""
     labels = dict(bucket_labels())
@@ -161,6 +173,7 @@ def complaint_list(request: HttpRequest) -> HttpResponse:
         "buckets": [("", "All"), *bucket_labels()],
         "active_bucket": filters.get("bucket", ""),
         "can_register": perms.can(request.user, perms.REGISTER),
+        "open_case": _case_to_open(request, visible),
     }
     template = "complaints/_list.html" if _is_htmx(request) else "complaints/list.html"
     return render(request, template, context)
@@ -516,6 +529,56 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         "ai_used": bool(ai),
     } | _staged_context(request, complaint, chosen, meta["sha"], ai.get("summary", ""))
     return render(request, "complaints/_action_form.html", context)
+
+
+# ------------------------------------------------------------ notifications
+
+
+@login_required
+def notifications(request: HttpRequest) -> HttpResponse:
+    mine = Notification.objects.filter(recipient=request.user).select_related("complaint")
+    show = "unread" if request.GET.get("show") == "unread" else "all"
+    if show == "unread":
+        mine = mine.filter(read_at__isnull=True)
+    return render(
+        request,
+        "complaints/notifications.html",
+        {
+            "page": paginate(mine, request.GET.get("page"), 30),
+            "show": show,
+            "attention": attention_items(request.user, perms.visible_complaints(request.user)),
+            "unread_total": notification_service.unread_count(request.user),
+        },
+    )
+
+
+@login_required
+def notification_bell(request: HttpRequest) -> HttpResponse:
+    """Just the bell, so the page can refresh it every so often without reloading."""
+    return render(request, "complaints/_bell.html", bell_context(request.user))
+
+
+@login_required
+@require_http_methods(["POST"])
+def notifications_read_all(request: HttpRequest) -> HttpResponse:
+    Notification.objects.filter(recipient=request.user, read_at__isnull=True).update(
+        read_at=timezone.now()
+    )
+    if _is_htmx(request):
+        return render(request, "complaints/_bell.html", bell_context(request.user))
+    return redirect("complaints:notifications")
+
+
+@login_required
+def notification_open(request: HttpRequest, pk: int) -> HttpResponse:
+    """Mark one as read and go to the case it is about."""
+    note = get_object_or_404(Notification, pk=pk, recipient=request.user)
+    if note.read_at is None:
+        note.read_at = timezone.now()
+        note.save(update_fields=["read_at"])
+    if perms.visible_complaints(request.user).filter(pk=note.complaint_id).exists():
+        return redirect(f"{reverse('complaints:list')}?case={note.complaint_id}")
+    return redirect("complaints:notifications")
 
 
 # ----------------------------------------------------- dashboard and downloads

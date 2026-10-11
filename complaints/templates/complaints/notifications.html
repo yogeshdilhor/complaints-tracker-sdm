@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Notifications - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<div class="notif-head">
+  <h2>Notifications</h2>
+  <div class="notif-actions">
+    <nav class="range" aria-label="Show">
+      <a href="?show=all" {% if show == "all" %}class="on"{% endif %}>All</a>
+      <a href="?show=unread" {% if show == "unread" %}class="on"{% endif %}>Unread{% if unread_total %} ({{ unread_total }}){% endif %}</a>
+    </nav>
+    {% if unread_total %}
+    <form method="post" action="{% url 'complaints:notifications_read_all' %}">{% csrf_token %}<button type="submit" class="secondary outline">Mark all read</button></form>
+    {% endif %}
+  </div>
+</div>
+
+{% if attention %}
+<section class="attention">
+  <h4 class="section-title">Needs attention now</h4>
+  <ul>
+    {% for a in attention %}<li class="tone-{{ a.tone }}"><a href="{{ a.url }}">{{ a.text }} <span aria-hidden="true">&rarr;</span></a></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="notif-list">
+  {% for n in page %}
+  <a class="notif {% if not n.read_at %}unread{% endif %} tone-{{ n.tone }}" href="{% url 'complaints:notification_open' n.pk %}">
+    <span class="n-dot" aria-hidden="true"></span>
+    <span class="n-main">
+      <span class="n-title">{{ n.title }}</span>
+      <span class="n-body">{{ n.body }}</span>
+    </span>
+    <span class="n-time">{{ n.created_at|timesince }} ago</span>
+  </a>
+  {% empty %}
+  <p class="empty">{% if show == "unread" %}You are all caught up.{% else %}No notifications yet. When a department files a report or a case is marked to you, it appears here.{% endif %}</p>
+  {% endfor %}
+</section>
+
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pages">
+  {% if page.has_previous %}<a href="?show={{ show }}&page={{ page.previous_page_number }}">&laquo; Newer</a>{% endif %}
+  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?show={{ show }}&page={{ page.next_page_number }}">Older &raquo;</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

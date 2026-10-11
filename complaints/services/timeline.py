@@ -41,7 +41,7 @@ def _document_ids(event: Event) -> list[int]:
     return [i for i in dict.fromkeys(ids) if i]
 
 
-def _describe(event: Event, complaint: Complaint) -> tuple[str, str, str]:
+def describe_event(event: Event, complaint: Complaint) -> tuple[str, str, str]:
     """(title, tone, detail) for one event."""
     p = event.payload
     title, tone, detail = _default_description(event, complaint)
@@ -112,7 +112,7 @@ def build_timeline(complaint: Complaint) -> list[Stage]:
     }
     stages: list[Stage] = []
     for event in complaint.events.select_related("actor"):
-        title, tone, detail = _describe(event, complaint)
+        title, tone, detail = describe_event(event, complaint)
         attached = [documents.pop(i) for i in _document_ids(event) if i in documents]
         stages.append(Stage(title, event.occurred_at, event.actor, tone, detail, attached))
     if documents:

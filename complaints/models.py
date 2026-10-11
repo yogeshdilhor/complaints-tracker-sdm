@@ -338,3 +338,37 @@ class Event(models.Model):
 
     def delete(self, *args, **kwargs):
         raise AppendOnlyError("Events are append-only.")
+
+
+class Notification(models.Model):
+    """Something a user should hear about when they next log in: a report filed, a case
+    marked to them. Created by complaints.services.notifications, never edited by hand."""
+
+    class Tone(models.TextChoices):
+        INFO = "info"
+        OK = "ok"
+        WARN = "warn"
+        BAD = "bad"
+
+    office = models.ForeignKey(Office, on_delete=models.PROTECT)
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications"
+    )
+    complaint = models.ForeignKey(Complaint, on_delete=models.PROTECT, related_name="+")
+    event = models.ForeignKey(Event, null=True, on_delete=models.PROTECT, related_name="+")
+    title = models.CharField(max_length=250)
+    body = models.CharField(max_length=400, blank=True)
+    tone = models.CharField(max_length=5, choices=Tone.choices, default=Tone.INFO)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["recipient", "read_at", "-created_at"], name="notif_user_unread_idx"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.recipient}: {self.title}"

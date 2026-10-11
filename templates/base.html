@@ -24,6 +24,7 @@
       {% if can_analyse %}<a href="{% url 'complaints:export' %}" {% if nav_page == 'export' %}class="active"{% endif %}>Table download</a>{% endif %}
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
     </nav>
+    {% include "complaints/_bell.html" %}
     {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
     <form method="post" action="{% url 'logout' %}" class="logout">
       {% csrf_token %}
@@ -32,6 +33,18 @@
     </form>
   </header>
   <div id="progress" aria-hidden="true"></div>
+  {% if notif_greeting %}
+  <div class="greet" role="status">
+    <div>
+      <b>You have {{ notif_unread }} new notification{{ notif_unread|pluralize }}.</b>
+      {% for n in notif_greeting %}<span class="greet-item">{{ n.title }}</span>{% endfor %}
+    </div>
+    <div class="greet-actions">
+      <a href="{% url 'complaints:notifications' %}">View</a>
+      <button type="button" class="linklike" onclick="this.closest('.greet').remove()" aria-label="Dismiss">&times;</button>
+    </div>
+  </div>
+  {% endif %}
   {% endwith %}
   {% endif %}
   <main class="{% block main_class %}page{% endblock %}">
@@ -55,8 +68,15 @@
       }
       // After the list is (re)loaded keep the same case highlighted, else open the first one.
       function afterList() {
+        var pane = document.getElementById('detail-pane');
+        if (pane && pane.dataset.open) {   // sent here by a notification: open that case
+          selectedHref = pane.dataset.open;
+          delete pane.dataset.open;
+          if (window.htmx) { htmx.ajax('GET', selectedHref, { target: '#detail-pane', swap: 'innerHTML' }); }
+        }
         var match = cards().filter(function (c) { return c.getAttribute('href') === selectedHref; })[0];
-        if (match) { mark(match); } else if (wide()) { openCard(cards()[0]); }
+        if (match) { mark(match); match.scrollIntoView({ block: 'nearest' }); }
+        else if (!selectedHref && wide()) { openCard(cards()[0]); }
       }
 
       document.body.addEventListener('htmx:afterSwap', function (e) {

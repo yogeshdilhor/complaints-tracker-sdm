@@ -1,0 +1,33 @@
+<div id="bell" class="bell"
+     hx-get="{% url 'complaints:notification_bell' %}" hx-trigger="every 45s [!document.querySelector('#bell details[open]')]" hx-swap="outerHTML">
+  <details>
+    <summary aria-label="Notifications" title="Notifications">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+      {% if notif_unread %}<span class="bell-count">{% if notif_unread > 9 %}9+{% else %}{{ notif_unread }}{% endif %}</span>{% endif %}
+    </summary>
+    <div class="bell-panel">
+      <div class="bell-head">
+        <b>Notifications</b>
+        {% if notif_unread %}
+        <form method="post" action="{% url 'complaints:notifications_read_all' %}" hx-post="{% url 'complaints:notifications_read_all' %}" hx-target="#bell" hx-swap="outerHTML">
+          {% csrf_token %}<button type="submit" class="linklike">Mark all read</button>
+        </form>
+        {% endif %}
+      </div>
+      <ul>
+        {% for n in notif_recent %}
+        <li class="{% if not n.read_at %}unread{% endif %} tone-{{ n.tone }}">
+          <a href="{% url 'complaints:notification_open' n.pk %}">
+            <span class="n-title">{{ n.title }}</span>
+            <span class="n-body">{{ n.body }}</span>
+            <span class="n-time">{{ n.created_at|timesince }} ago</span>
+          </a>
+        </li>
+        {% empty %}
+        <li class="none">Nothing yet. Reports and new cases will show up here.</li>
+        {% endfor %}
+      </ul>
+      <a class="bell-all" href="{% url 'complaints:notifications' %}">See all notifications</a>
+    </div>
+  </details>
+</div>
