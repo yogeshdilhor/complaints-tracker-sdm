@@ -104,6 +104,18 @@
         if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change', { bubbles: true })); }
       });
 
+      // Dropdowns (the bell, "+ Add stage") close when you click anywhere else or press Esc.
+      var DROPDOWNS = '.bell details, .add-menu';
+      function closeDropdowns(except) {
+        document.querySelectorAll(DROPDOWNS).forEach(function (d) {
+          if (d !== except && d.open) { d.open = false; }
+        });
+      }
+      document.addEventListener('click', function (e) {
+        closeDropdowns(e.target.closest ? e.target.closest(DROPDOWNS) : null);
+      });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeDropdowns(null); } });
+
       // Keyboard: "/" search, j / k (or arrows) next and previous case, Esc closes on phones.
       document.addEventListener('keydown', function (e) {
         var t = e.target, typing = t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
