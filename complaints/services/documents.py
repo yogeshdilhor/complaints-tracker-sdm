@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -176,6 +177,20 @@ def _ocr_pdf_page(source: Path, page: int, workdir: Path) -> tuple[str, str, flo
     return _ocr_both(prefix.with_suffix(".png"))
 
 
+# Aadhaar numbers (12 digits, usually in groups of four) turn up on the ID copies attached to
+# letters. They are never kept as searchable text and never sent to an AI.
+_AADHAAR_RE = re.compile(r"(?<!\d)[2-9]\d{3}[ \-]?\d{4}[ \-]?\d{4}(?!\d)")
+_DEVANAGARI_AADHAAR_RE = re.compile(
+    r"(?<![\d०-९])[२-९०-९]{4}[ \-]?[०-९]{4}[ \-]?[०-९]{4}(?![\d०-९])"
+)
+REDACTED_ID = "[ID number removed]"
+
+
+def redact_ids(text: str) -> str:
+    """Blank out Aadhaar-style numbers. A 10-digit phone number is left alone."""
+    return _DEVANAGARI_AADHAAR_RE.sub(REDACTED_ID, _AADHAAR_RE.sub(REDACTED_ID, text))
+
+
 @dataclass
 class Extraction:
     text: str = ""
@@ -187,7 +202,7 @@ class Extraction:
     typed: bool | None = None
 
 
-def extract(content: bytes, mime_type: str) -> Extraction:
+def _extract(content: bytes, mime_type: str) -> Extraction:
     """Read text from an upload.
 
     PDFs use pdftotext first. Pages without a text layer (scans, photos, screenshots) go
@@ -237,6 +252,14 @@ def extract(content: bytes, mime_type: str) -> Extraction:
             return Extraction(text, status, len(pages) or None, latin_text, typed)
     except (subprocess.SubprocessError, OSError):
         return Extraction(status=Document.TextStatus.FAILED)
+
+
+def extract(content: bytes, mime_type: str) -> Extraction:
+    """Read text from an upload (see _extract), with ID numbers removed."""
+    result = _extract(content, mime_type)
+    result.text = redact_ids(result.text)
+    result.latin_text = redact_ids(result.latin_text)
+    return result
 
 
 def extract_text(content: bytes, mime_type: str) -> tuple[str, str, int | None]:

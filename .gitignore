@@ -11,3 +11,6 @@ staticfiles/
 *.log
 # duplicate of docs/ copy
 /SDM Complaint Tracker*.pdf
+
+# local-only compose override (holds a path to real complaint files)
+docker-compose.override.yml
