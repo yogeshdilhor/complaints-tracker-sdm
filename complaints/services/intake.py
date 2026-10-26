@@ -229,6 +229,29 @@ def _applicant_name(block: str) -> str:
     return name if 0 < len(name.split()) <= 5 else ""
 
 
+SARPANCH = "Sarpanch"
+MULTIPLE_COMPLAINANTS = "Multiple complainants"
+# Only a seal counts, not a letter that merely mentions the village's Sarpanch ("सरपंच को कई बार
+# कहा"): the English seal text, or a Hindi line that starts with सरपंच and names the panchayat.
+_SARPANCH_RE = re.compile(r"sarpanch|^[ \t]*सरपंच[^\n]*पंचायत", re.IGNORECASE | re.MULTILINE)
+_PANCHAYAT_SEAL_RE = re.compile(r"Gram\s+Panchayat[,\s]+([A-Z][A-Za-z]+)", re.IGNORECASE)
+# A letter signed by the village: "सभी नौरंग वासी", "ग्रामवासी", "villagers". Not "निवासी" (resident
+# of), which every individual letter uses.
+_COLLECTIVE_RE = re.compile(r"(?<!नि)वासी|ग्रामीण|समस्त|\bresidents\b|\bvillagers\b", re.IGNORECASE)
+
+
+def _collective_complainant(text: str, latin_text: str) -> str:
+    """ "Sarpanch" when the letter carries a Sarpanch's seal, "Multiple complainants" when it
+    is signed by many villagers, else "". The Sarpanch rule wins."""
+    both = f"{text}\n{latin_text}"
+    if _SARPANCH_RE.search(both):
+        seal = _PANCHAYAT_SEAL_RE.search(both)
+        return f"{SARPANCH}, Gram Panchayat {seal.group(1)}" if seal else SARPANCH
+    if _COLLECTIVE_RE.search(text):
+        return MULTIPLE_COMPLAINANTS
+    return ""
+
+
 def _village_from_labels(text: str, villages: list[Village]) -> tuple[int | None, str]:
     """Look at the word after 'गांव' / 'मौजा' / 'village'; returns (village id, unmatched word)."""
     by_name = {}
@@ -284,6 +307,9 @@ def guess_fields(text: str, office: Office, latin_text: str = "") -> Prefill:
     if not prefill.name and (m := _NAME_LABEL_RE.search(text)):
         prefill.name = m.group(1).strip()[:200]
 
+    if collective := _collective_complainant(text, latin_text):
+        prefill.name = collective
+
     phones = _phones(latin_text) or _phones(block) or _phones(text)
     if phones:
         prefill.phone = phones[0]
@@ -326,7 +352,7 @@ def merge_ai_fields(prefill: Prefill, ai: dict[str, str], office: Office) -> Non
         prefill.phone = phone
     if ai.get("address") and not prefill.address:
         prefill.address = ai["address"][:300]
-    if ai.get("subject") and not prefill.subject:
+    if ai.get("subject"):
         prefill.subject = ai["subject"][:300]
     if ai.get("village"):
         wanted = ai["village"].strip().casefold()

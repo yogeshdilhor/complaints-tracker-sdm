@@ -1,0 +1,11 @@
+<div id="legacy-progress"
+     {% if job.status != 'failed' %}hx-get="{% url 'complaints:legacy_status' job.pk %}" hx-trigger="every 3s" hx-target="#legacy-progress" hx-swap="outerHTML"{% endif %}>
+  {% if job.status == 'failed' %}
+  <p class="error" role="alert">{{ job.error }}</p>
+  <p><a href="{% url 'complaints:legacy_upload' %}">Try again</a></p>
+  {% else %}
+  <p><b>{{ job.get_status_display }}</b>{% if job.step_note %} &middot; {{ job.step_note }}{% endif %}</p>
+  <progress {% if job.pages_total %}value="{{ job.pages_done }}" max="{{ job.pages_total }}"{% endif %}></progress>
+  <p class="muted small">{{ job.filename }} &middot; {{ job.pages_total }} pages. A long file takes a few minutes. You can leave this page and come back from Legacy complaint.</p>
+  {% endif %}
+</div>

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Check the legacy complaint - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<article class="narrow wide">
+  <h2>Check the legacy complaint</h2>
+  <p class="muted">{{ job.filename }} &middot; {{ job.pages_total }} pages &middot; {{ docs|length }} documents found. Correct anything that is wrong, untick what should not be added, then create the complaint.</p>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <h4 class="section-title">The complaint</h4>
+    {{ form.as_div }}
+
+    <h4 class="section-title">The timeline: one stage per document, oldest first</h4>
+    <p class="muted small">Dates read from handwriting and stamps are sometimes wrong. Check them against the file.</p>
+    <ol class="legacy-docs">
+      {% for number, d in docs %}
+      <li>
+        <label class="keep"><input type="checkbox" name="keep_{{ number }}" checked> Add this stage</label>
+        <div class="legacy-row">
+          <span class="legacy-kind">{{ d.kind }}</span>
+          <input type="text" name="headline_{{ number }}" value="{{ d.headline }}" maxlength="150" aria-label="Headline">
+        </div>
+        <p class="muted small">Pages {{ d.first }}{% if d.last != d.first %}&ndash;{{ d.last }}{% endif %} &middot;
+          {% if d.date %}{{ d.date }}{% else %}undated{% endif %}{% if d.date_unsure %} (date unclear, placed by order){% endif %}
+          {% if d.sender or d.to %} &middot; {{ d.sender }} &rarr; {{ d.to }}{% endif %}</p>
+        {% if d.summary %}<p class="doc-summary">{{ d.summary }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="form-buttons">
+      <button type="submit">Create the complaint with this history</button>
+      <a role="button" class="secondary outline" href="{% url 'complaints:legacy_upload' %}">Cancel</a>
+    </div>
+  </form>
+</article>
+{% endblock %}

@@ -590,8 +590,11 @@ def add_stage(
     headline: str,
     note: str = "",
     documents: list[Document] | None = None,
+    at: datetime | None = None,
 ) -> Event:
-    """A stage the user names themselves, with an optional note and any number of documents."""
+    """A stage the user names themselves, with an optional note and any number of documents.
+
+    `at` dates it to when the document was written, for stages added from an old file."""
     headline = headline.strip()[:HEADLINE_MAX]
     if not headline:
         raise InvalidTransitionData("A stage needs a title.")
@@ -603,7 +606,7 @@ def add_stage(
         payload["note"] = note.strip()
     if documents:
         payload["document_ids"] = [d.pk for d in documents]
-    return _log(complaint, EventType.NOTE_ADDED, actor, timezone.now(), payload)
+    return _log(complaint, EventType.NOTE_ADDED, actor, at or timezone.now(), payload)
 
 
 def add_note(complaint: Complaint, actor: Any, text: str, headline: str = "") -> Event:

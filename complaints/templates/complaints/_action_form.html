@@ -1,7 +1,7 @@
 <form method="post" action="{% url 'complaints:action' complaint.pk action %}"
       hx-post="{% url 'complaints:action' complaint.pk action %}" hx-target="#action-area" hx-swap="innerHTML"
       {% if multipart %}enctype="multipart/form-data" hx-encoding="multipart/form-data"{% endif %}
-      class="action-form">
+      class="action-form"{% if smart_departments is not None %} data-smart{% endif %}{% if stage_menu %} data-stage-menu{% endif %}>
   {% csrf_token %}
   <h4>{{ label }}</h4>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
@@ -21,6 +21,13 @@
     </label>
     <p class="muted small">Changing the type reloads the form below with the same document.</p>
   </div>
+  {% endif %}
+  {% if stage_menu %}{{ stage_menu|json_script:"stage-menu-data" }}{% endif %}
+  {% if smart_departments is not None %}
+  {{ smart_departments|json_script:"smart-departments-data" }}
+  <p class="muted small smart-hint">Type <b>$</b> for the kinds of stage, <b>@</b> to mark it to an office, <b>#</b> to pick a date. For example &ldquo;Report expected from @BDPO by #&rdquo;. If nothing matches, just write your own title.</p>
+  {% elif stage_menu %}
+  <p class="muted small smart-hint">Type <b>$</b> for the usual titles, or write your own.</p>
   {% endif %}
   {{ form.as_div }}
   <div class="form-buttons">

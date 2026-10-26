@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Legacy complaint - SDM Complaint Tracker{% endblock %}
+{% block content %}
+<article class="narrow">
+  <h2>Legacy complaint</h2>
+  <p>Upload the whole file of an old complaint as <b>one PDF</b> (up to {{ max_pages }} pages, {{ max_mb }} MB):
+     the complaint, the letters, reports and evidence in any order. The pages are read, sorted into separate
+     documents, dated and summarised, and each document becomes a stage on the timeline. Nothing is created
+     until you check the result.</p>
+  <p class="warning-box">The pages are sent to the providers you choose below <b>unmasked</b>, with names and numbers as they appear.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" enctype="multipart/form-data" id="legacy-form">
+    {% csrf_token %}
+    {{ form.as_div }}
+    <button type="submit" onclick="this.setAttribute('aria-busy','true');this.textContent='Uploading…'">Upload and read</button>
+  </form>
+  {% if recent %}
+  <h4 class="section-title">Recent legacy uploads</h4>
+  <ul class="plain">
+    {% for j in recent %}
+    <li><a href="{% url 'complaints:legacy_status' j.pk %}">{{ j.filename }}</a> &middot; {{ j.pages_total }} pages &middot; {{ j.get_status_display }}{% if j.complaint %} &middot; <a href="{% url 'complaints:detail' j.complaint_id %}">{{ j.complaint.ref_no }}</a>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</article>
+{% endblock %}

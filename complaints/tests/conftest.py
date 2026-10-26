@@ -22,6 +22,15 @@ def fast_password_hashing(settings):
 
 
 @pytest.fixture(autouse=True)
+def no_real_ai_keys(settings):
+    """Tests must never call a real model, whatever keys the developer's .env holds."""
+    settings.OPENAI_API_KEY = settings.SARVAM_API_KEY = ""
+    settings.LLM_PROVIDER = "openai"
+    settings.ANTHROPIC_API_KEY = ""
+    settings.LEGACY_RUN_INLINE = True
+
+
+@pytest.fixture(autouse=True)
 def media_root(settings, tmp_path):
     settings.MEDIA_ROOT = tmp_path / "media"
     return settings.MEDIA_ROOT

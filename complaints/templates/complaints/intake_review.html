@@ -10,7 +10,7 @@
   <p class="error">Reading the file failed. Please type the details.</p>
   {% endif %}
   {% if handwritten %}
-  <p class="warning-box">This letter looks <strong>handwritten</strong>, so no AI summary was made. The text below is only a rough machine reading &mdash; please check every field against the original.</p>
+  <p class="warning-box">This letter looks <strong>handwritten</strong>, so the machine reading, and any AI summary built on it, may contain mistakes. Please check every field against the original.</p>
   {% endif %}
   {% if village_hint %}
   <p class="muted">The letter mentions the village <strong>{{ village_hint }}</strong>, which is not in the village list. Pick the right village, or ask an admin to add it.</p>

@@ -386,3 +386,47 @@ class Notification(models.Model):
 
     def __str__(self) -> str:
         return f"{self.recipient}: {self.title}"
+
+
+class LegacyImport(models.Model):
+    """A big scanned file being turned into a complaint with its whole history.
+
+    The file is read in the background; `pages` holds the text of each page and `proposal` the
+    complaint details and documents the model found, for the user to check before anything is
+    created."""
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Waiting"
+        READING = "reading", "Reading the pages"
+        ANALYSING = "analysing", "Working out the documents"
+        SUMMARISING = "summarising", "Summarising each document"
+        READY = "ready", "Ready to check"
+        DONE = "done", "Added"
+        FAILED = "failed", "Failed"
+
+    office = models.ForeignKey(Office, on_delete=models.PROTECT)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.QUEUED)
+    step_note = models.CharField(max_length=200, blank=True)
+    pages_total = models.PositiveIntegerField(default=0)
+    pages_done = models.PositiveIntegerField(default=0)
+    filename = models.CharField(max_length=255)
+    sha256 = models.CharField(max_length=64)
+    file = models.CharField(max_length=300)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    reader = models.CharField(max_length=20)
+    analyser = models.CharField(max_length=20)
+    pages = models.JSONField(default=list, blank=True)
+    proposal = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+    complaint = models.ForeignKey(
+        Complaint, null=True, blank=True, on_delete=models.SET_NULL, related_name="legacy_imports"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.filename} ({self.status})"

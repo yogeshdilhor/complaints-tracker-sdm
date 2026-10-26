@@ -4,15 +4,17 @@ from datetime import date
 from typing import Any
 
 from django import forms
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from complaints.models import Complaint, Document, Platform, State, Tag
+from complaints.services import legacy
 from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
 from complaints.services.search import BUCKET_CHOICES
 from complaints.services.timeline import portal_name
-from complaints.widgets import START_ON_OWN, WheelWidget
+from complaints.widgets import WheelWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
 from core.models import Category, Department, Office, Village
 
@@ -154,22 +156,31 @@ DEFAULT_HEADLINE = {
 }
 
 
-def _headline_field(complaint: Complaint, action: str | None) -> forms.CharField:
-    """A wheel of stage titles, with a way to write your own."""
+def stage_titles(complaint: Complaint) -> list[str]:
+    """The usual stage titles, with this complaint's officer and portal filled in."""
     current = complaint.current_department
+    officer = str(current) if current else "the department"
+    portal = portal_name(complaint)
+    return [t.format(officer=officer, portal=portal) for t in HEADLINE_PRESETS]
+
+
+def _headline_field(complaint: Complaint, action: str | None) -> forms.CharField:
+    """The stage title, typed. Typing "$" offers the usual titles; blank = the system's own."""
+    current = complaint.current_department
+    template = DEFAULT_HEADLINE.get(action or "", "")
+    if "{officer}" in template and current is None:
+        template = ""  # the officer is not known yet; leave the title to the system
     return forms.CharField(
         required=False,
         max_length=200,
         label="Stage title on the timeline",
-        widget=WheelWidget(
-            [(t, t) for t in HEADLINE_PRESETS],
-            own_placeholder="Write the title of this stage",
-            selected=DEFAULT_HEADLINE.get(action or ""),
-            data={
-                "kind": "headline",
-                "portal": portal_name(complaint),
-                "officer": str(current) if current else "",
-            },
+        initial=template.format(officer=current, portal=portal_name(complaint)),
+        widget=forms.TextInput(
+            attrs={
+                "autocomplete": "off",
+                "data-smart-title": "1",
+                "placeholder": "Type $ for ideas",
+            }
         ),
     )
 
@@ -388,20 +399,26 @@ class UnfileForm(forms.Form):
 
 
 class AddStageForm(forms.Form):
-    """A stage you name yourself: a title, an optional note, and any number of documents."""
+    """A stage you write in one line, with any number of documents."""
 
-    note = forms.CharField(
-        required=False, widget=forms.Textarea(attrs={"rows": 3}), label="What happened (optional)"
-    )
     files = MultiAttachmentField(required=False, label="Documents for this stage (any number)")
+    # Filled in by static/js/mentions.js when "@office" or "by <date>" is typed.
+    mark_department = forms.ModelChoiceField(
+        queryset=Department.objects.none(), required=False, widget=forms.HiddenInput
+    )
+    mark_new_department = forms.CharField(required=False, max_length=200, widget=forms.HiddenInput)
+    expected_by = forms.DateField(required=False, widget=forms.HiddenInput)
 
     def __init__(self, *args, complaint: Complaint, **kwargs):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
+        self.fields["mark_department"].queryset = _active_departments(complaint.office)
         headline = _headline_field(complaint, None)
-        headline.widget.selected = START_ON_OWN
         headline.required = True
         headline.label = "Name this stage"
+        headline.widget.attrs["placeholder"] = (
+            "Type $ for stage types, @ for an office, # for a date"
+        )
         self.fields["headline"] = headline
         self.order_fields(["headline"])
 
@@ -467,8 +484,33 @@ class EditDetailsForm(forms.Form):
 # ------------------------------------------------------------------- intake
 
 
+AI_CHOICES = [
+    ("openai", "ChatGPT (OpenAI)"),
+    ("sarvam", "Sarvam AI"),
+    (
+        "sarvam_docs",
+        "Sarvam reading the pages (best for Hindi handwriting; sends the pages unmasked)",
+    ),
+    (
+        "openai_vision",
+        "ChatGPT reading page images (sends the pages unmasked)",
+    ),
+    ("none", "Do not use AI"),
+]
+
+
 class IntakeUploadForm(forms.Form):
     file = AttachmentField(required=True, label="Complaint (PDF, JPG or PNG, max 10 MB)")
+    ai_provider = forms.ChoiceField(
+        choices=AI_CHOICES,
+        widget=forms.RadioSelect,
+        label="Read and summarise with",
+        initial=lambda: settings.LLM_PROVIDER,
+        required=False,
+    )
+
+    def clean_ai_provider(self) -> str:
+        return self.cleaned_data.get("ai_provider") or settings.LLM_PROVIDER
 
 
 class IntakeForm(forms.Form):
@@ -513,6 +555,61 @@ class IntakeForm(forms.Form):
         if value > timezone.localdate():
             raise ValidationError("Received date cannot be in the future.")
         return value
+
+
+class LegacyUploadForm(forms.Form):
+    file = forms.FileField(label="The whole file as one PDF")
+    reader = forms.ChoiceField(
+        choices=legacy.READERS, widget=forms.RadioSelect, label="Read the pages with"
+    )
+    analyser = forms.ChoiceField(
+        choices=legacy.ANALYSERS,
+        widget=forms.RadioSelect,
+        label="Work out the documents and summarise with",
+    )
+
+
+CURRENT_STATES = [
+    ("awaiting", "Waiting for a report from the department"),
+    ("review", "A report has come in; the SDM is reviewing it"),
+    ("closed", "Closed"),
+]
+
+
+class LegacyConfirmForm(forms.Form):
+    """The complaint details the AI found in an old file; the user checks them."""
+
+    name = forms.CharField(max_length=200, label="Complainant name")
+    phone = forms.CharField(max_length=20, required=False)
+    address = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
+    village = forms.ModelChoiceField(queryset=Village.objects.none(), required=False)
+    subject = forms.CharField(max_length=300, label="Heading")
+    description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
+    source_platform = forms.ChoiceField(choices=Platform.choices, label="Platform")
+    external_ref = forms.CharField(max_length=100, required=False, label="External reference")
+    received_on = forms.DateField(widget=_DATE, label="Complaint received on")
+    department = forms.ModelChoiceField(
+        queryset=Department.objects.none(), label="Currently with (or last marked to)"
+    )
+    current_state = forms.ChoiceField(choices=CURRENT_STATES, label="Where does it stand now?")
+    closed_reason = forms.CharField(required=False, label="Reason it was closed")
+
+    def __init__(self, *args, office: Office, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["village"].queryset = Village.objects.filter(office=office, is_active=True)
+        self.fields["department"].queryset = _active_departments(office)
+
+    def clean_phone(self) -> str:
+        return normalise_phone(self.cleaned_data["phone"])
+
+    def clean(self):
+        cleaned = super().clean()
+        if (
+            cleaned.get("current_state") == "closed"
+            and not cleaned.get("closed_reason", "").strip()
+        ):
+            self.add_error("closed_reason", "Say why it was closed.")
+        return cleaned
 
 
 ACTION_FORMS: dict[str, type[forms.Form]] = {

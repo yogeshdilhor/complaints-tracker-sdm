@@ -9,6 +9,7 @@ import json
 import logging
 
 from complaints.services import llm
+from complaints.services.masking import mask_private
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +31,36 @@ REPORT_PROMPT = (
 )
 
 
-def _complete(prompt: str, *, max_tokens: int = MAX_OUTPUT_TOKENS, as_json: bool = False):
-    return llm.complete(prompt, max_tokens=max_tokens, as_json=as_json)
+def _complete(
+    prompt: str,
+    *,
+    max_tokens: int = MAX_OUTPUT_TOKENS,
+    as_json: bool = False,
+    provider: str | None = None,
+):
+    return llm.complete(prompt, max_tokens=max_tokens, as_json=as_json, provider_name=provider)
 
 
-def summarise_description(text: str) -> str:
+def _masked(text: str, known: list[str] | None) -> str:
+    """The letter as the model may see it: no ID, phone or bank numbers, no known names."""
+    return mask_private(text, known or ())
+
+
+def summarise_description(text: str, known: list[str] | None = None) -> str:
     """A 50-75 word summary of `text`; the original text if it is already short or on failure."""
     if len(text.split()) <= MIN_WORDS_TO_SUMMARISE:
         return text
-    return _complete(PROMPT.format(text=text)) or text
+    return _complete(PROMPT.format(text=_masked(text, known))) or text
 
 
-def summarise_report(text: str, kind: str) -> str | None:
+def summarise_report(
+    text: str, kind: str, known: list[str] | None = None, provider: str | None = None
+) -> str | None:
     """A 50-75 word summary of a document's text; None if it could not be made."""
-    return _complete(REPORT_PROMPT.format(kind=kind, text=text[:REPORT_MAX_CHARS]))
+    return _complete(
+        REPORT_PROMPT.format(kind=kind, text=_masked(text[:REPORT_MAX_CHARS], known)),
+        provider=provider,
+    )
 
 
 FIELDS_MAX_CHARS = 6000
@@ -51,13 +68,11 @@ FIELDS_MAX_TOKENS = 700
 FIELDS_PROMPT = (
     "You read a complaint letter received by a sub-divisional magistrate's office in Haryana, "
     "India. The text comes from OCR and may contain mistakes. Reply with one JSON object with "
-    "these keys, using an empty string when the letter does not say:\n"
+    "these keys, using an empty string when the letter does not say. Private details in the "
+    "letter are replaced by [private], [phone] and similar markers; ignore them:\n"
     '"summary": 50 to 75 words, in the same language as the letter: the problem, the place, '
     "key facts and what the person asks for; nothing that is not in the letter\n"
     '"subject": the complaint title in at most 12 words, same language as the letter\n'
-    '"name": the complainant\'s own name\n'
-    '"phone": the complainant\'s 10-digit mobile number, digits only\n'
-    '"address": the complainant\'s address as written\n'
     '"village": the village the complaint is about, chosen from this list if it matches, '
     "otherwise as written: {villages}\n"
     '"tag": a short 2-4 word label for the kind of complaint, in English, such as '
@@ -65,15 +80,23 @@ FIELDS_PROMPT = (
 )
 
 
-def extract_complaint_fields(text: str, village_names: list[str]) -> dict[str, str]:
+def extract_complaint_fields(
+    text: str,
+    village_names: list[str],
+    provider: str | None = None,
+    known: list[str] | None = None,
+) -> dict[str, str]:
     """Summary, subject, name, phone, address, village and tag read from a letter by the model.
 
     Returns {} when there is no key or the call fails; the caller then keeps its own guesses.
     """
     raw = _complete(
-        FIELDS_PROMPT.format(villages=", ".join(village_names[:300]), text=text[:FIELDS_MAX_CHARS]),
+        FIELDS_PROMPT.format(
+            villages=", ".join(village_names[:300]), text=_masked(text[:FIELDS_MAX_CHARS], known)
+        ),
         max_tokens=FIELDS_MAX_TOKENS,
         as_json=True,
+        provider=provider,
     )
     if not raw:
         return {}
@@ -82,7 +105,7 @@ def extract_complaint_fields(text: str, village_names: list[str]) -> dict[str, s
     except ValueError:
         logger.warning("Field extraction returned something that is not JSON")
         return {}
-    keys = ("summary", "subject", "name", "phone", "address", "village", "tag")
+    keys = ("summary", "subject", "village", "tag")
     return {k: str(data.get(k) or "").strip() for k in keys} if isinstance(data, dict) else {}
 
 
@@ -121,7 +144,12 @@ STAGE_PROMPT = (
 
 
 def read_document_as_stage(
-    text: str, context: dict[str, str], allowed: list[str]
+    text: str,
+    context: dict[str, str],
+    allowed: list[str],
+    provider: str | None = None,
+    known: list[str] | None = None,
+    mask: bool = True,
 ) -> dict[str, str]:
     """What a newly uploaded document says, as a proposed stage; {} if the model is unavailable.
 
@@ -129,9 +157,14 @@ def read_document_as_stage(
     """
     options = "\n".join(f"- {key}: {STAGE_OPTIONS[key]}" for key in allowed if key in STAGE_OPTIONS)
     raw = _complete(
-        STAGE_PROMPT.format(options=options, text=text[:STAGE_MAX_CHARS], **context),
+        STAGE_PROMPT.format(
+            options=options,
+            text=_masked(text[:STAGE_MAX_CHARS], known) if mask else text[:STAGE_MAX_CHARS],
+            **context,
+        ),
         max_tokens=STAGE_MAX_TOKENS,
         as_json=True,
+        provider=provider,
     )
     if not raw:
         return {}
@@ -146,3 +179,95 @@ def read_document_as_stage(
     if result["action"] not in allowed:
         result["action"] = "add_stage"
     return result
+
+
+# ---------------------------------------------------------------- reading page images
+VISION_FIELDS_PROMPT = (
+    "These are the pages of a complaint letter received by a sub-divisional magistrate's "
+    "office in Haryana, India. It may be handwritten, in Hindi or English, and may carry "
+    "stamps and many signatures. Reply with one JSON object with these keys, using an empty "
+    "string when the letter does not say:\n"
+    '"summary": 50 to 75 words, in the same language as the letter: the problem, the place, '
+    "key facts and what is asked; nothing that is not in the letter\n"
+    '"subject": the complaint title in at most 12 words, same language as the letter\n'
+    '"name": who is complaining. If a Sarpanch\'s seal or stamp is on the letter, write '
+    '"Sarpanch, Gram Panchayat <village on the seal>" (or just "Sarpanch"), even when many '
+    "people also signed. If there is no such seal and the letter is signed by several people, "
+    'write "Multiple complainants". Otherwise the single complainant\'s own name.\n'
+    '"phone": the complainant\'s 10-digit mobile number, digits only\n'
+    '"address": the complainant\'s address as written\n'
+    '"village": the village the complaint is about, chosen from this list if it matches, '
+    "otherwise as written: {villages}\n"
+    '"tag": a short 2-4 word label for the kind of complaint, in English'
+)
+
+
+def extract_complaint_fields_from_images(
+    images: list[bytes], village_names: list[str]
+) -> dict[str, str]:
+    """Like extract_complaint_fields, but the model looks at the page images (OpenAI only)."""
+    raw = llm.complete_with_images(
+        VISION_FIELDS_PROMPT.format(villages=", ".join(village_names[:300])),
+        images,
+        max_tokens=FIELDS_MAX_TOKENS,
+        as_json=True,
+    )
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    keys = ("summary", "subject", "name", "phone", "address", "village", "tag")
+    return {k: str(data.get(k) or "").strip() for k in keys} if isinstance(data, dict) else {}
+
+
+def read_document_images_as_stage(
+    images: list[bytes], context: dict[str, str], allowed: list[str]
+) -> dict[str, str]:
+    """Like read_document_as_stage, but from page images."""
+    options = "\n".join(f"- {key}: {STAGE_OPTIONS[key]}" for key in allowed if key in STAGE_OPTIONS)
+    prompt = STAGE_PROMPT.replace(
+        "The text comes from OCR and may contain mistakes.",
+        "The document is attached as page images.",
+    ).format(options=options, text="(see the attached page images)", **context)
+    raw = llm.complete_with_images(prompt, images, max_tokens=STAGE_MAX_TOKENS, as_json=True)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keys = ("action", "headline", "officer", "date", "summary", "ack_no", "reason", "note")
+    result = {k: str(data.get(k) or "").strip() for k in keys}
+    if result["action"] not in allowed:
+        result["action"] = "add_stage"
+    return result
+
+
+def extract_complaint_fields_unmasked(
+    text: str, village_names: list[str], provider: str | None = None
+) -> dict[str, str]:
+    """Fields from text that is already as exposed as it can be (the pages were sent to
+    Sarvam for reading), so nothing is masked and the model may read the name, phone and
+    address as well."""
+    prompt = VISION_FIELDS_PROMPT.replace(
+        "These are the pages of a complaint letter", "Below is the text of a complaint letter"
+    ).replace("It may be handwritten, in Hindi or English,", "It may be in Hindi or English")
+    raw = _complete(
+        prompt.format(villages=", ".join(village_names[:300]))
+        + f"\n\nLetter:\n{text[:FIELDS_MAX_CHARS]}",
+        max_tokens=FIELDS_MAX_TOKENS,
+        as_json=True,
+        provider=provider,
+    )
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    keys = ("summary", "subject", "name", "phone", "address", "village", "tag")
+    return {k: str(data.get(k) or "").strip() for k in keys} if isinstance(data, dict) else {}

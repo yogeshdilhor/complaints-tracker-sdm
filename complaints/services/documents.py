@@ -177,8 +177,39 @@ def _ocr_pdf_page(source: Path, page: int, workdir: Path) -> tuple[str, str, flo
     return _ocr_both(prefix.with_suffix(".png"))
 
 
+VISION_DPI = 110  # enough to read handwriting while keeping each page cheap to send
+
+
+def page_images(content: bytes, mime_type: str, max_pages: int | None = None) -> list[bytes]:
+    """The first pages of an upload as JPEG/PNG bytes, for a model that can see images."""
+    limit = max_pages or settings.VISION_MAX_PAGES
+    if mime_type != "application/pdf":
+        return [content]
+    if not shutil.which("pdftoppm"):
+        return []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "in.pdf"
+            source.write_bytes(content)
+            _run(
+                [
+                    "pdftoppm",
+                    "-r",
+                    str(VISION_DPI),
+                    "-l",
+                    str(limit),
+                    "-jpeg",
+                    str(source),
+                    str(Path(tmp) / "p"),
+                ]
+            )
+            return [p.read_bytes() for p in sorted(Path(tmp).glob("p*.jpg"))]
+    except (subprocess.SubprocessError, OSError):
+        return []
+
+
 # Aadhaar numbers (12 digits, usually in groups of four) turn up on the ID copies attached to
-# letters. They are never kept as searchable text and never sent to an AI.
+# letters. They are kept on the portal but masked before any text is sent to an AI.
 _AADHAAR_RE = re.compile(r"(?<!\d)[2-9]\d{3}[ \-]?\d{4}[ \-]?\d{4}(?!\d)")
 _DEVANAGARI_AADHAAR_RE = re.compile(
     r"(?<![\d०-९])[२-९०-९]{4}[ \-]?[०-९]{4}[ \-]?[०-९]{4}(?![\d०-९])"
@@ -255,11 +286,9 @@ def _extract(content: bytes, mime_type: str) -> Extraction:
 
 
 def extract(content: bytes, mime_type: str) -> Extraction:
-    """Read text from an upload (see _extract), with ID numbers removed."""
-    result = _extract(content, mime_type)
-    result.text = redact_ids(result.text)
-    result.latin_text = redact_ids(result.latin_text)
-    return result
+    """Read text from an upload. Private details stay here; they are masked only when the text
+    is sent to a language model (see services/masking.py)."""
+    return _extract(content, mime_type)
 
 
 def extract_text(content: bytes, mime_type: str) -> tuple[str, str, int | None]:

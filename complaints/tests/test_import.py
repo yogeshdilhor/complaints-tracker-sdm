@@ -190,16 +190,13 @@ def test_aadhaar_numbers_are_removed_but_phones_and_references_are_not(text, exp
     assert redact_ids(text) == expected
 
 
-def test_every_extraction_is_redacted(monkeypatch):
+def test_extraction_keeps_the_text_for_the_portal(monkeypatch):
     from complaints.services import documents
 
     monkeypatch.setattr(
-        documents,
-        "_extract",
-        lambda c, m: Extraction("card 4821 6093 7715", "done", 1, latin_text="4821 6093 7715"),
+        documents, "_extract", lambda c, m: Extraction("card 4821 6093 7715", "done", 1)
     )
-    result = documents.extract(b"x", "application/pdf")
-    assert "4821" not in result.text and "4821" not in result.latin_text
+    assert "4821 6093 7715" in documents.extract(b"x", "application/pdf").text
 
 
 @pytest.mark.parametrize(
@@ -252,19 +249,16 @@ def test_the_ai_pass_fills_gaps_without_overwriting(
     monkeypatch.setattr(
         rr,
         "extract_complaint_fields",
-        lambda text, villages: {
+        lambda text, villages, **k: {
             "summary": "A short summary.",
             "subject": "Better subject",
-            "name": "Ram Singh",
-            "phone": "9111122222",
-            "address": "House 4",
             "village": "Phagu",
             "tag": "housing instalment",
         },
     )
     call_command("reread_complaints", stdout=io.StringIO())
     c.refresh_from_db()
-    assert c.description == "A short summary." and c.complainant.name == "Ram Singh"
+    assert c.description == "A short summary." and c.complainant.name != "Unknown"
     assert c.subject == original_subject  # a real subject is kept
     assert str(c.village) == kept_village  # so is a village the reader already found
     other.refresh_from_db()
@@ -278,13 +272,13 @@ def test_the_ai_pass_needs_a_key_and_skips_what_is_done(
     from complaints.management.commands import reread_complaints as rr
 
     run(folder, actor=clerk)
-    settings.OPENAI_API_KEY = ""
+    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
     with pytest.raises(CommandError):
         call_command("reread_complaints", stdout=io.StringIO())
     settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
     calls = []
     monkeypatch.setattr(
-        rr, "extract_complaint_fields", lambda t, v: calls.append(1) or {"summary": "s"}
+        rr, "extract_complaint_fields", lambda t, v, **k: calls.append(1) or {"summary": "s"}
     )
     call_command("reread_complaints", stdout=io.StringIO())
     first = len(calls)
@@ -299,7 +293,7 @@ def test_the_ai_pass_stops_when_the_ai_is_not_answering(
 
     run(folder, actor=clerk)
     settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
-    monkeypatch.setattr(rr, "extract_complaint_fields", lambda t, v: {})
+    monkeypatch.setattr(rr, "extract_complaint_fields", lambda t, v, **k: {})
     with pytest.raises(CommandError):
         call_command("reread_complaints", stdout=io.StringIO())
 
@@ -314,7 +308,7 @@ def test_the_ai_pass_leaves_out_handwritten_and_poorly_read_letters(
     settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
     calls = []
     monkeypatch.setattr(
-        rr, "extract_complaint_fields", lambda t, v: calls.append(1) or {"summary": "s"}
+        rr, "extract_complaint_fields", lambda t, v, **k: calls.append(1) or {"summary": "s"}
     )
     call_command("reread_complaints", stdout=io.StringIO())
     assert calls == []

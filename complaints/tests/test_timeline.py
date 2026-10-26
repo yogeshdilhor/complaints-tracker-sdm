@@ -174,17 +174,15 @@ def test_the_form_renders_wheels_for_the_officer_and_the_title(
     html = client.get(
         reverse("complaints:action", args=[c.pk, "issue_notice"]), HTTP_HX_REQUEST="true"
     ).content.decode()
-    assert html.count('class="wheel-field"') == 2
-    assert "Marked to {officer} for report" in html and "Write my own..." in html
+    assert html.count('class="wheel-field"') == 1  # only the officer; the title is typed
+    assert 'data-smart-title="1"' in html and "stage-menu-data" in html
     assert ">Tehsildar</li>" in html
 
 
 # ------------------------------------------------ custom stages and documents on any stage
 
 
-def test_a_custom_stage_has_your_title_note_and_any_number_of_documents(
-    client, clerk, make_complaint
-):
+def test_a_custom_stage_has_your_title_and_any_number_of_documents(client, clerk, make_complaint):
     from django.core.files.uploadedfile import SimpleUploadedFile
 
     c = make_complaint()
@@ -197,12 +195,11 @@ def test_a_custom_stage_has_your_title_note_and_any_number_of_documents(
         clerk,
         c,
         "add_stage",
-        {"headline": "Site inspection by SDM", "note": "Drain found blocked", "files": files},
+        {"headline": "Site inspection by SDM", "files": files},
     )
     assert response.status_code == 200
     stage = build_timeline(c)[-1]
     assert stage.title == "Site inspection by SDM"
-    assert "Drain found blocked" in stage.detail
     assert len(stage.documents) == 3
 
 
@@ -235,7 +232,7 @@ def test_the_plus_menu_offers_the_custom_stage_and_not_the_old_buttons(
     c = make_complaint()
     client.force_login(clerk)
     html = client.get(reverse("complaints:detail", args=[c.pk])).content.decode()
-    assert "Add stage" in html and "Custom stage: name it yourself" in html
+    assert "Add stage" in html and "/do/add_stage/" in html  # opens the typed composer
     assert "Attach document" not in html and "Add note" not in html
 
 

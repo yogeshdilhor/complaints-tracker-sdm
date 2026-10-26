@@ -111,34 +111,52 @@ def test_one_handwritten_page_in_a_mixed_pdf_makes_it_handwritten(tools):  # noq
     assert extract(b"%PDF-1.4", "application/pdf").typed is False
 
 
-def test_handwritten_letters_are_not_sent_to_the_model(login, clerk, monkeypatch):  # noqa: F811
+def test_handwritten_letters_are_still_sent_but_flagged(login, clerk, monkeypatch, settings):  # noqa: F811
+    settings.OPENAI_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
         "complaints.views.extract",
         lambda content, mime: Extraction("scrawl", "done", 1, typed=False),
     )
     monkeypatch.setattr(
-        "complaints.views.extract_complaint_fields", lambda *a: calls.append(a) or {"name": "X"}
+        "complaints.views.extract_complaint_fields",
+        lambda *a, **k: calls.append(a) or {},
     )
     client = login(clerk)
     upload_step(client)
     html = client.get(reverse("complaints:intake_review")).content.decode()
-    assert not calls and "handwritten" in html
+    assert len(calls) == 1 and "handwritten" in html
 
 
-def test_typed_letters_are_sent_to_the_model(login, clerk, monkeypatch):  # noqa: F811
+def test_typed_letters_are_sent_once_to_the_chosen_provider(login, clerk, monkeypatch, settings):  # noqa: F811
+    settings.SARVAM_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
         "complaints.views.extract",
         lambda content, mime: Extraction("A typed letter", "done", 1, typed=True),
     )
     monkeypatch.setattr(
-        "complaints.views.extract_complaint_fields", lambda *a: calls.append(a) or {}
+        "complaints.views.extract_complaint_fields",
+        lambda *a, **k: calls.append(k.get("provider")) or {},
     )
     client = login(clerk)
-    upload_step(client)
+    upload_step(client, ai_provider="sarvam")
     client.get(reverse("complaints:intake_review"))
-    assert len(calls) == 1
+    assert calls == ["sarvam"]
+
+
+def test_choosing_no_ai_sends_nothing(login, clerk, monkeypatch, settings):  # noqa: F811
+    settings.OPENAI_API_KEY = "k"
+    calls = []
+    monkeypatch.setattr(
+        "complaints.views.extract",
+        lambda content, mime: Extraction("A typed letter", "done", 1, typed=True),
+    )
+    monkeypatch.setattr(
+        "complaints.views.extract_complaint_fields", lambda *a, **k: calls.append(a) or {}
+    )
+    upload_step(login(clerk), ai_provider="none")
+    assert not calls
 
 
 def test_a_handwritten_document_gets_no_summary(login, clerk, complaint, make_document, settings):  # noqa: F811
@@ -150,3 +168,141 @@ def test_a_handwritten_document_gets_no_summary(login, clerk, complaint, make_do
     assert "handwritten" in html
     doc.refresh_from_db()
     assert doc.summary == ""
+
+
+def test_vision_upload_sends_page_images_to_openai_and_prefills(
+    login,  # noqa: F811
+    clerk,
+    monkeypatch,
+    settings,  # noqa: F811
+):
+    settings.OPENAI_API_KEY = "k"
+    seen = {}
+
+    def fake_images(prompt, images, **kw):
+        seen["images"], seen["prompt"] = images, prompt
+        return json.dumps(
+            {
+                "summary": "Tower wire burns.",
+                "subject": "Tower wire",
+                "name": "Sarpanch, Gram Panchayat Naurang",
+            }
+        )
+
+    monkeypatch.setattr(llm, "complete_with_images", fake_images)
+    monkeypatch.setattr("complaints.views.page_images", lambda content, mime: [b"\xff\xd8\xffjpg"])
+    monkeypatch.setattr(
+        "complaints.views.extract", lambda content, mime: Extraction("", "done", 1, typed=False)
+    )
+    client = login(clerk)
+    upload_step(client, ai_provider="openai_vision")
+    html = client.get(reverse("complaints:intake_review")).content.decode()
+    assert seen["images"] == [b"\xff\xd8\xffjpg"] and "Sarpanch" in seen["prompt"]
+    assert "Sarpanch, Gram Panchayat Naurang" in html and "Tower wire burns." in html
+    assert "looks <strong>handwritten</strong>" not in html
+
+
+def test_vision_request_carries_the_image_as_a_data_url(monkeypatch, settings, sent):
+    settings.OPENAI_API_KEY, settings.OPENAI_VISION_MODEL = "k", "gpt-4.1-mini"
+    llm.complete_with_images("read", [b"\xff\xd8\xffjpg"], max_tokens=50)
+    body = sent["body"]
+    content = body["messages"][0]["content"]
+    assert body["model"] == "gpt-4.1-mini"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+LETTER = "सुखपाल सिह पुत्र हरनेक सिह निवासी गांव फुल्लो\nमो० 87088-54538"
+FIELDS = {
+    "summary": "Rubble piled on the government road in front of the house.",
+    "subject": "Rubble on public road at Phullo",
+    "name": "सुखपाल सिह",
+    "phone": "8708854538",
+    "address": "गांव फुल्लो",
+    "village": "फुल्लो",
+    "tag": "road obstruction",
+}
+
+
+def test_sarvam_pages_upload_fills_every_field(login, clerk, monkeypatch, settings):  # noqa: F811
+    from complaints.services import sarvam_docs
+
+    settings.SARVAM_API_KEY = "k"
+    monkeypatch.setattr(sarvam_docs, "digitise", lambda content, mime, **k: LETTER)
+    monkeypatch.setattr(
+        "complaints.views.extract_complaint_fields_unmasked", lambda *a, **k: dict(FIELDS)
+    )
+    monkeypatch.setattr(
+        "complaints.views.extract", lambda content, mime: Extraction("", "done", 1, typed=False)
+    )
+    client = login(clerk)
+    upload_step(client, ai_provider="sarvam_docs")
+    html = client.get(reverse("complaints:intake_review")).content.decode()
+    assert "सुखपाल सिह" in html and "Rubble on public road at Phullo" in html
+    assert "8708854538" in html and "Rubble piled on the government road" in html
+    assert "looks <strong>handwritten</strong>" not in html
+
+
+def test_digitise_returns_the_text_of_each_page(monkeypatch, settings):
+    import io
+    import zipfile
+
+    from complaints.services import sarvam_docs
+
+    settings.SARVAM_API_KEY = "k"
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr(
+            "letter.pdf/metadata/page_001.json",
+            json.dumps({"blocks": [{"reading_order": 1, "text": "बिजली की समस्या"}]}),
+        )
+    calls = iter(
+        [
+            {"job_id": "j1", "status": "pending"},
+            {"status": "completed"},
+            {"url": "https://download.example/x.zip"},
+        ]
+    )
+    monkeypatch.setattr(sarvam_docs, "_call", lambda *a, **k: next(calls))
+    monkeypatch.setattr(sarvam_docs.time, "sleep", lambda s: None)
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *e):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Resp(archive.getvalue()))
+    assert sarvam_docs.digitise(b"%PDF", "application/pdf") == "बिजली की समस्या"
+
+
+def test_reread_digitise_updates_name_heading_summary_and_text(
+    monkeypatch,
+    settings,
+    make_complaint,
+    make_document,  # noqa: F811
+):
+    import io
+
+    from django.core.management import call_command
+
+    from complaints.models import Tag
+    from complaints.services import sarvam_docs
+
+    settings.SARVAM_API_KEY = "k"
+    c = make_complaint()
+    c.complainant.name = "Unknown"
+    c.complainant.save()
+    make_document(c, kind="complaint")
+    Tag.objects.get_or_create(office=c.office, name="Imported - verify")[0].complaints.add(c)
+    monkeypatch.setattr(sarvam_docs, "digitise", lambda content, mime, **k: LETTER)
+    monkeypatch.setattr(
+        "complaints.management.commands.reread_complaints.extract_complaint_fields_unmasked",
+        lambda *a, **k: dict(FIELDS),
+    )
+    call_command("reread_complaints", "--digitise", stdout=io.StringIO())
+    c = type(c).objects.select_related("complainant").get(pk=c.pk)
+    assert c.complainant.name == "सुखपाल सिह" and c.subject == FIELDS["subject"]
+    assert c.description == FIELDS["summary"]
+    doc = c.documents.first()
+    assert doc.extracted_text == LETTER and doc.summary == FIELDS["summary"]

@@ -73,11 +73,14 @@ def test_filing_through_the_ui_needs_a_reason_and_the_admin(client, sdm, reviewe
 
 
 def test_the_menu_offers_filing_to_the_admin_only(client, sdm, reviewer, complaint):
-    url = reverse("complaints:detail", args=[complaint.pk])
+    url = reverse("complaints:action", args=[complaint.pk, "add_stage"])
     client.force_login(sdm)
-    assert "File this complaint (move to Archive)" in client.get(url).content.decode()
+    assert (
+        "File this complaint (move to Archive)"
+        in client.get(url, HTTP_HX_REQUEST="true").content.decode()
+    )
     client.force_login(reviewer)
-    assert "File this complaint" not in client.get(url).content.decode()
+    assert "File this complaint" not in client.get(url, HTTP_HX_REQUEST="true").content.decode()
 
 
 # ------------------------------------------------------------ where it vanishes

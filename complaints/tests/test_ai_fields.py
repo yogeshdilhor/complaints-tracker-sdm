@@ -13,13 +13,11 @@ from complaints.workflow import Action, apply_transition
 
 
 def test_extract_fields_parses_the_models_json(settings, monkeypatch):
-    reply = json.dumps(
-        {"summary": "Drain blocked.", "name": "Ram", "phone": "98765 43210", "tag": "drain"}
-    )
+    reply = json.dumps({"summary": "Drain blocked.", "name": "Ram", "tag": "drain"})
     monkeypatch.setattr(ai, "_complete", lambda *a, **k: reply)
     fields = ai.extract_complaint_fields("letter", ["Bhattu"])
-    assert fields["summary"] == "Drain blocked." and fields["name"] == "Ram"
-    assert fields["village"] == "" and fields["address"] == ""
+    assert fields["summary"] == "Drain blocked." and fields["tag"] == "drain"
+    assert fields["village"] == "" and "name" not in fields
 
 
 @pytest.mark.parametrize("reply", [None, "not json", "[1, 2]"])
@@ -29,7 +27,7 @@ def test_extract_fields_gives_nothing_when_the_call_or_reply_is_bad(monkeypatch,
 
 
 def test_extract_fields_does_nothing_without_a_key(settings):
-    settings.OPENAI_API_KEY = ""
+    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
     assert ai.extract_complaint_fields("letter", []) == {}
 
 
@@ -44,7 +42,7 @@ def test_merge_ai_fields_overrides_guesses_and_matches_village_and_tag(office, v
             "phone": "+91 90000 12345",
             "village": village.name.upper(),
             "tag": "pension",
-            "subject": "ignored: a subject was already found",
+            "subject": "The model heading",
         },
         office,
     )
@@ -53,7 +51,7 @@ def test_merge_ai_fields_overrides_guesses_and_matches_village_and_tag(office, v
         "9000012345",
         "Short.",
     )
-    assert prefill.village_id == village.pk and prefill.subject == "kept"
+    assert prefill.village_id == village.pk and prefill.subject == "The model heading"
     assert prefill.tag_id and prefill.new_tag == ""
     assert prefill.as_initial()["tags"] == [prefill.tag_id]
 

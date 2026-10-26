@@ -9,6 +9,10 @@
   <label>Document (PDF, JPG or PNG)
     <input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required>
   </label>
+  <fieldset class="ai-choice">
+    <legend>Read and summarise with</legend>
+    {% for radio in form.ai_provider %}<label>{{ radio.tag }} {{ radio.choice_label }}</label>{% endfor %}
+  </fieldset>
   <p id="read-note" class="muted small htmx-indicator">Reading the document&hellip; this can take up to 30 seconds.</p>
   <div class="form-buttons">
     <button type="submit">Read document</button>

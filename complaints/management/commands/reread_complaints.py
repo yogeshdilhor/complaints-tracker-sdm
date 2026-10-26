@@ -12,11 +12,18 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 
 from complaints.models import Complaint, Document, Tag
-from complaints.services import intake, llm
-from complaints.services.description_summary import extract_complaint_fields
+from complaints.services import intake, llm, sarvam_docs
+from complaints.services.description_summary import (
+    extract_complaint_fields,
+    extract_complaint_fields_from_images,
+    extract_complaint_fields_unmasked,
+)
+from complaints.services.documents import page_images
 from core.models import Village
 
 TAG_DONE = "AI-read"
+TAG_VISION = "Vision-read"
+TAG_DIGITISED = "Sarvam-read"
 TAG_VERIFY = "Imported - verify"
 
 
@@ -27,13 +34,126 @@ class Command(BaseCommand):
         parser.add_argument("--tag", default=TAG_VERIFY, help="Only complaints with this tag")
         parser.add_argument("--limit", type=int, default=0)
         parser.add_argument(
+            "--digitise",
+            action="store_true",
+            help="Read the page images with Sarvam's document reader (pages sent unmasked)",
+        )
+        parser.add_argument(
+            "--vision",
+            action="store_true",
+            help="Send the page images to the OpenAI vision model instead of the text",
+        )
+        parser.add_argument(
             "--include-scanned",
             action="store_true",
             help="Also read letters the reader flagged as handwritten or low quality (by default "
             "only typed ones are sent to the AI)",
         )
 
+    def _handle_vision(self, opts):
+        """Read the page images of each complaint's letter with the OpenAI vision model.
+
+        Page images are sent unmasked. The complainant's name read from the letter replaces
+        whatever is there; other fields only fill gaps.
+        """
+        if not llm.is_configured("openai"):
+            raise CommandError("OPENAI_API_KEY is not set.")
+        tag = None
+        todo = (
+            Complaint.objects.filter(tags__name=opts["tag"])
+            .exclude(tags__name=TAG_VISION)
+            .select_related("complainant", "office")
+            .distinct()
+            .order_by("pk")
+        )
+        if opts["limit"]:
+            todo = todo[: opts["limit"]]
+        updated = failed = 0
+        for complaint in todo:
+            document = complaint.documents.filter(
+                kind=Document.Kind.COMPLAINT, is_deleted=False
+            ).first()
+            if document is None:
+                continue
+            with document.file.open("rb") as handle:
+                images = page_images(handle.read(), document.mime_type)
+            names = list(
+                Village.objects.filter(office=complaint.office).values_list("name", flat=True)
+            )
+            ai = extract_complaint_fields_from_images(images, names) if images else {}
+            if not ai:
+                failed += 1
+                self.stdout.write(f"  {complaint.ref_no}: no answer")
+                if failed >= 3 and not updated:
+                    raise CommandError("OpenAI is not answering (no credit?). Stopping.")
+                continue
+            self._apply(complaint, ai, replace_name=True)
+            if ai.get("summary"):
+                Document.objects.filter(pk=document.pk).update(summary=ai["summary"][:2000])
+            tag = tag or Tag.objects.get_or_create(office=complaint.office, name=TAG_VISION)[0]
+            complaint.tags.add(tag)
+            updated += 1
+            self.stdout.write(
+                f"  {complaint.ref_no}: {complaint.complainant.name} | {complaint.subject[:50]}"
+            )
+        self.stdout.write(self.style.SUCCESS(f"{updated} read, {failed} without an answer."))
+
+    def _handle_digitise(self, opts):
+        """Read each complaint's letter with Sarvam's page reader, then fill in every field.
+
+        The pages are sent to Sarvam unmasked. The better text replaces the scan reader's text
+        on the document; name, heading, summary, village, phone and address are all updated.
+        """
+        if not sarvam_docs.is_configured():
+            raise CommandError("SARVAM_API_KEY is not set.")
+        tag = None
+        todo = (
+            Complaint.objects.filter(tags__name=opts["tag"])
+            .exclude(tags__name=TAG_DIGITISED)
+            .select_related("complainant", "office")
+            .distinct()
+            .order_by("pk")
+        )
+        if opts["limit"]:
+            todo = todo[: opts["limit"]]
+        updated = failed = 0
+        for complaint in todo:
+            document = complaint.documents.filter(
+                kind=Document.Kind.COMPLAINT, is_deleted=False
+            ).first()
+            if document is None:
+                continue
+            with document.file.open("rb") as handle:
+                text = sarvam_docs.digitise(handle.read(), document.mime_type)
+            names = list(
+                Village.objects.filter(office=complaint.office).values_list("name", flat=True)
+            )
+            ai = extract_complaint_fields_unmasked(text, names, provider="sarvam") if text else {}
+            if not ai:
+                failed += 1
+                self.stdout.write(f"  {complaint.ref_no}: no answer")
+                if failed >= 3 and not updated:
+                    raise CommandError("Sarvam is not answering. Stopping.")
+                continue
+            Document.objects.filter(pk=document.pk).update(
+                extracted_text=text,
+                text_status=Document.TextStatus.DONE,
+                is_typed=True,
+                summary=ai.get("summary", "")[:2000],
+            )
+            self._apply(complaint, ai, replace_name=True)
+            tag = tag or Tag.objects.get_or_create(office=complaint.office, name=TAG_DIGITISED)[0]
+            complaint.tags.add(tag)
+            updated += 1
+            who, village = complaint.complainant.name, complaint.village or "-"
+            self.stdout.write(f"  {complaint.ref_no}: {who} | {village} | {complaint.subject[:60]}")
+        self.stdout.write(self.style.SUCCESS(f"{updated} read, {failed} without an answer."))
+
     def handle(self, *args, **opts):
+        if opts["digitise"]:
+            return self._handle_digitise(opts)
+        if opts["vision"]:
+            return self._handle_vision(opts)
         if not llm.is_configured():
             raise CommandError(
                 "No AI key is set for the chosen provider. Set it in .env and try again."
@@ -60,7 +180,21 @@ class Command(BaseCommand):
             names = list(
                 Village.objects.filter(office=complaint.office).values_list("name", flat=True)
             )
-            ai = extract_complaint_fields(text, names)
+            # Name, phone and address are read here with patterns, not by the AI; whatever is
+            # found (or already on file) is masked out of the text the AI sees.
+            guess = intake.guess_fields(text, complaint.office)
+            person = complaint.complainant
+            known = [
+                guess.name,
+                guess.phone,
+                guess.address,
+                person.name,
+                person.phone,
+                person.address,
+            ]
+            ai = extract_complaint_fields(text, names, known=[k for k in known if k != "Unknown"])
+            if ai:
+                ai |= {"name": guess.name, "phone": guess.phone, "address": guess.address}
             if not ai:
                 failed += 1
                 self.stdout.write(f"  {complaint.ref_no}: the AI gave no answer")
@@ -78,13 +212,13 @@ class Command(BaseCommand):
             self.style.SUCCESS(f"{updated} complaints read, {failed} without an answer.")
         )
 
-    def _apply(self, complaint: Complaint, ai: dict[str, str]) -> None:
+    def _apply(self, complaint: Complaint, ai: dict[str, str], replace_name: bool = False) -> None:
         person = complaint.complainant
-        if ai.get("summary") and not complaint.description:
+        if ai.get("summary") and (replace_name or not complaint.description):
             complaint.description = ai["summary"]
-        if ai.get("subject") and complaint.subject.startswith("Complaint SRS"):
+        if ai.get("subject") and (replace_name or complaint.subject.startswith("Complaint SRS")):
             complaint.subject = ai["subject"][:300]
-        if ai.get("name") and person.name == "Unknown":
+        if ai.get("name") and (replace_name or person.name == "Unknown"):
             person.name = ai["name"][:200]
         phone = intake.normalise_phone(ai.get("phone", ""))
         if len(phone) == 10 and not person.phone:

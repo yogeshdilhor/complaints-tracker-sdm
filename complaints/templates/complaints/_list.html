@@ -10,15 +10,15 @@
   <div class="card-top">
     <strong class="ref">{{ c.ref_no }}</strong>
     <span class="tags">
-      {% if c.village %}<span class="tag">{{ c.village }}</span>{% endif %}
       <span class="tag tag-blue">{{ c.get_source_platform_display }}</span>
       {% if c.is_open %}<span class="tag age age-{{ c.bucket }}">{{ c.days_pending }}d</span>
       {% else %}<span class="tag age age-closed">Closed</span>{% endif %}
     </span>
   </div>
+  <div class="card-id"><b>{{ c.complainant.name }}</b>{% if c.village %} &middot; {{ c.village }}{% endif %}</div>
   <div class="card-subject">{{ c.subject }}</div>
   <div class="card-foot">
-    <span class="who">{{ c.complainant.name }} &middot; {{ c.received_on|date:"j M" }}</span>
+    <span class="who">{{ c.received_on|date:"j M Y" }}</span>
     <span class="where">
       <span class="badge state-{{ c.current_state }}">{{ c.get_current_state_display }}</span>
       {% if c.is_open %}<span class="pending pending-{{ c.bucket }}">at {{ c.location }}</span>{% endif %}

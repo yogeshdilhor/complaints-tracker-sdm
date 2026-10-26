@@ -1,5 +1,10 @@
 {% if error %}
-<p class="doc-summary muted">{{ error }}</p>
+<p class="doc-summary muted">{{ error }}
+{% if offer_anyway %}
+  <a href="#" hx-post="{% url 'complaints:document_summary' document.pk %}" hx-vals='{"force": "1"}'
+     hx-target="#doc-summary-{{ document.pk }}" hx-swap="innerHTML">Summarise anyway</a>
+  <br><small>The text was read from a poor scan, so the summary may contain mistakes.</small>
+{% endif %}</p>
 {% else %}
 <p class="doc-summary">{{ document.summary|linebreaksbr }}</p>
 {% endif %}

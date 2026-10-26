@@ -7,7 +7,8 @@
   <link rel="stylesheet" href="{% static 'vendor/pico.min.css' %}">
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
   <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
-  <script src="{% static 'js/wheel.js' %}" defer></script>
+  <script src="{% static 'js/wheel.js' %}?v=3" defer></script>
+  <script src="{% static 'js/mentions.js' %}?v=3" defer></script>
   <script src="{% static 'js/splitter.js' %}" defer></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
@@ -27,7 +28,7 @@
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
     </nav>
     {% include "complaints/_bell.html" %}
-    {% if can_register %}<a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
+    {% if can_register %}<a class="cta cta-quiet" href="{% url 'complaints:legacy_upload' %}">Legacy complaint</a><a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
     <div class="user-menu">
       <details>
         <summary aria-label="Account menu" title="{{ user.get_full_name|default:user.username }}">

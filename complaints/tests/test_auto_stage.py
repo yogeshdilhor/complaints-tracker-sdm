@@ -28,7 +28,7 @@ def ai(monkeypatch, settings):
     settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
     seen = []
 
-    def fake(text, context, allowed):
+    def fake(text, context, allowed, provider=None, known=None):
         seen.append((text, context, allowed))
         return {
             "action": "record_report",
@@ -65,7 +65,9 @@ def test_the_upload_form_is_offered(client, clerk, awaiting):
 
 def test_the_plus_menu_has_the_upload_option(client, clerk, awaiting):
     client.force_login(clerk)
-    html = client.get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
+    html = client.get(
+        reverse("complaints:action", args=[awaiting.pk, "add_stage"]), **HX
+    ).content.decode()
     assert "Upload a document" in html and "Read it automatically" in html
 
 
@@ -133,24 +135,25 @@ def test_a_custom_stage_from_a_document(client, clerk, awaiting, ai):
     assert stage.documents[0].summary == "s"
 
 
-def test_a_handwritten_document_is_not_sent_to_the_model(
+def test_a_handwritten_document_is_still_read_but_flagged(
     client, clerk, awaiting, monkeypatch, settings
 ):
-    settings.OPENAI_API_KEY = "k"
+    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
     calls = []
-    monkeypatch.setattr("complaints.views.read_document_as_stage", lambda *a: calls.append(a) or {})
+    monkeypatch.setattr(
+        "complaints.views.read_document_as_stage", lambda *a, **k: calls.append(a) or {}
+    )
     monkeypatch.setattr(
         "complaints.views.extract",
         lambda content, mime: Extraction("scrawl", "done", 1, typed=False),
     )
     client.force_login(clerk)
     html = client.post(url(awaiting), {"file": pdf()}, **HX).content.decode()
-    assert not calls and "could not be read automatically" in html
-    assert "Name this stage" in html  # falls back to a custom stage to fill in by hand
+    assert calls and "could not be read automatically" in html
 
 
 def test_without_a_key_the_form_still_works_by_hand(client, clerk, awaiting, monkeypatch, settings):
-    settings.OPENAI_API_KEY = ""
+    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
     monkeypatch.setattr(
         "complaints.views.extract", lambda content, mime: Extraction("typed", "done", 1, typed=True)
     )
@@ -165,7 +168,7 @@ def test_the_confirmation_remembers_the_departments_the_document_names(
     c = make_complaint()  # still RECEIVED: a notice marks it to someone
     monkeypatch.setattr(
         "complaints.views.read_document_as_stage",
-        lambda *a: {
+        lambda *a, **k: {
             "action": "issue_notice",
             "headline": "Marked to the Tehsildar",
             "officer": "Tehsildar office, Dabwali",

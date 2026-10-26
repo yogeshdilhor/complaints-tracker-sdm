@@ -6,6 +6,7 @@ Both providers speak the same chat-completions format, so switching is a setting
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import urllib.error
@@ -30,8 +31,17 @@ class Provider:
     reasoning_effort: str  # "" = leave unset, "off" = turn thinking off, else the level
 
 
-def provider() -> Provider:
-    if settings.LLM_PROVIDER == "sarvam":
+def provider(name: str | None = None) -> Provider:
+    if (name or settings.LLM_PROVIDER) == "anthropic":
+        return Provider(
+            "anthropic",
+            "https://api.anthropic.com/v1/messages",
+            settings.ANTHROPIC_API_KEY,
+            settings.ANTHROPIC_MODEL,
+            "max_tokens",
+            "",
+        )
+    if (name or settings.LLM_PROVIDER) == "sarvam":
         return Provider(
             "sarvam",
             "https://api.sarvam.ai/v1/chat/completions",
@@ -50,16 +60,46 @@ def provider() -> Provider:
     )
 
 
-def is_configured() -> bool:
-    return bool(provider().key)
+def is_configured(name: str | None = None) -> bool:
+    return bool(provider(name).key)
 
 
-def complete(prompt: str, *, max_tokens: int, as_json: bool = False) -> str | None:
+def complete_with_images(
+    prompt: str, images: list[bytes], *, max_tokens: int, as_json: bool = False
+) -> str | None:
+    """Ask the OpenAI vision model about page images. Private details in the images are NOT
+    masked: that is the price of reading handwriting and seals."""
+    chosen = provider("openai")
+    if not chosen.key or not images:
+        return None
+    parts: list[dict] = [{"type": "text", "text": prompt}]
+    for image in images:
+        mime = "image/png" if image.startswith(b"\x89PNG") else "image/jpeg"
+        encoded = base64.b64encode(image).decode()
+        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}})
+    payload: dict = {
+        "model": settings.OPENAI_VISION_MODEL,
+        "messages": [{"role": "user", "content": parts}],
+        chosen.token_param: max_tokens,
+    }
+    if as_json:
+        payload["response_format"] = {"type": "json_object"}
+    return _post(chosen, payload, f"{len(images)} page image(s)")
+
+
+def complete(
+    prompt: str, *, max_tokens: int, as_json: bool = False, provider_name: str | None = None
+) -> str | None:
     """One chat completion; None when there is no key or the call fails."""
-    chosen = provider()
+    chosen = provider(provider_name)
     if not chosen.key:
         return None
     payload: dict = {"model": chosen.model, "messages": [{"role": "user", "content": prompt}]}
+    if chosen.name == "anthropic":  # a different request shape; JSON is asked for in words
+        if as_json:
+            payload["messages"][0]["content"] += "\n\nReply with the JSON object only."
+        payload["max_tokens"] = max_tokens
+        return _post(chosen, payload, f"{len(prompt)} characters")
     effort = chosen.reasoning_effort
     if effort == "off":
         payload["reasoning_effort"] = None
@@ -69,16 +109,38 @@ def complete(prompt: str, *, max_tokens: int, as_json: bool = False) -> str | No
     payload[chosen.token_param] = max_tokens
     if as_json:
         payload["response_format"] = {"type": "json_object"}
+    return _post(chosen, payload, f"{len(prompt)} characters")
+
+
+def _headers(chosen: Provider) -> dict[str, str]:
+    if chosen.name == "anthropic":
+        return {
+            "x-api-key": chosen.key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+    return {
+        "authorization": f"Bearer {chosen.key}",
+        "api-subscription-key": chosen.key,  # Sarvam's own header; OpenAI ignores it
+        "content-type": "application/json",
+    }
+
+
+def _post(chosen: Provider, payload: dict, what: str) -> str | None:
     request = urllib.request.Request(  # noqa: S310 - fixed https URL
         chosen.url,
         data=json.dumps(payload).encode(),
-        headers={"authorization": f"Bearer {chosen.key}", "content-type": "application/json"},
+        headers=_headers(chosen),
     )
-    logger.info("Asking %s (%s) about %d characters", chosen.name, chosen.model, len(prompt))
+    logger.info("Asking %s (%s) about %s", chosen.name, payload["model"], what)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
             data = json.load(response)
-        text = (data["choices"][0]["message"]["content"] or "").strip()
+        if chosen.name == "anthropic":
+            text = "".join(b.get("text", "") for b in data["content"]).strip()
+            text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        else:
+            text = (data["choices"][0]["message"]["content"] or "").strip()
     except urllib.error.HTTPError as error:
         logger.warning("%s call failed: HTTP %s %s", chosen.name, error.code, error.read()[:300])
         return None

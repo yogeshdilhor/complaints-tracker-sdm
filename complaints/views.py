@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -27,29 +28,36 @@ from complaints.forms import (
     FileComplaintForm,
     IntakeForm,
     IntakeUploadForm,
+    LegacyConfirmForm,
+    LegacyUploadForm,
     NewLoginForm,
     NoteForm,
     UnfileForm,
+    stage_titles,
 )
 from complaints.models import (
     Complainant,
     Complaint,
     Document,
+    LegacyImport,
     Notification,
     PortalSubmission,
     Referral,
     State,
     Tag,
 )
-from complaints.services import intake, llm, logins
+from complaints.services import intake, legacy, llm, logins, sarvam_docs
 from complaints.services import notifications as notification_service
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
     extract_complaint_fields,
+    extract_complaint_fields_from_images,
+    extract_complaint_fields_unmasked,
     read_document_as_stage,
+    read_document_images_as_stage,
     summarise_report,
 )
-from complaints.services.documents import DuplicateDocument, extract, store_document
+from complaints.services.documents import DuplicateDocument, extract, page_images, store_document
 from complaints.services.export import build_workbook, export_queryset
 from complaints.services.notifications import attention_items
 from complaints.services.pendency import (
@@ -327,7 +335,7 @@ def _run_action(
             if staged is not None:
                 staged_doc = store_document(complaint, staged, Document.Kind.OTHER, user)
                 documents.append(staged_doc)
-            add_stage(complaint, user, data["headline"], data["note"], documents)
+            _add_custom_stage(complaint, user, data, documents)
         elif action == perms.ADD_NOTE:
             add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:
@@ -339,6 +347,89 @@ def _run_action(
         if staged_doc is not None and doc_summary:
             Document.objects.filter(pk=staged_doc.pk).update(summary=doc_summary[:2000])
     return credentials
+
+
+# Actions that "@office" already covers, so "$" does not list them.
+_COVERED_BY_AT = {Action.ISSUE_NOTICE, Action.REISSUE_NOTICE}
+
+
+def _stage_menu(request: HttpRequest, complaint: Complaint, *, with_actions: bool):
+    """What "$" offers in the stage title: titles to insert, and (when adding a stage) the
+    other kinds of stage, each of which opens its own form."""
+    rows: list[dict[str, str]] = []
+    if with_actions:
+        if perms.can(request.user, perms.ADD_STAGE, complaint):
+            rows.append(
+                {
+                    "kind": "load",
+                    "label": "Upload a document",
+                    "hint": "Read it automatically and fill in the stage",
+                    "url": reverse("complaints:stage_from_document", args=[complaint.pk]),
+                }
+            )
+        context = _detail_context(request, complaint)
+        for name, label in context["actions"]:
+            if name in (perms.ADD_STAGE, *_COVERED_BY_AT):
+                continue
+            rows.append(
+                {
+                    "kind": "load",
+                    "label": label,
+                    "hint": "Opens its form",
+                    "url": reverse("complaints:action", args=[complaint.pk, name]),
+                }
+            )
+    rows += [
+        {"kind": "text", "label": title, "hint": "Use this title"}
+        for title in stage_titles(complaint)
+    ]
+    return rows
+
+
+def _smart_departments(complaint: Complaint, action: str):
+    """The offices offered when "@" is typed in a custom stage; None for other forms."""
+    if action != perms.ADD_STAGE:
+        return None
+    rows = Department.objects.filter(office=complaint.office, is_active=True)
+    return [{"id": d.pk, "name": d.name, "short": d.short_name or d.name} for d in rows]
+
+
+def _add_custom_stage(complaint: Complaint, user, data: dict, documents: list[Document]) -> None:
+    """A stage the user wrote. If it names an office (typed "@BDPO"), the complaint is marked
+    to that office, with the date picked after "#" as the day the report is expected."""
+    data = data | {"headline": re.sub(r"@(?=\S)", "", data["headline"])}  # "@ZCRIM" reads "ZCRIM"
+    department = data.get("mark_department")
+    new_name = (data.get("mark_new_department") or "").strip()
+    if department is None and new_name:
+        department, _ = Department.objects.get_or_create(
+            office=complaint.office,
+            name=new_name[:200],
+            defaults={"short_name": new_name[:50], "kind": Department.Kind.EXTERNAL_DEPARTMENT},
+        )
+    state = complaint.current_state
+    due_on = data.get("expected_by")
+    if department is not None and state in (State.RECEIVED, State.AWAITING_REPORT):
+        action = Action.ISSUE_NOTICE if state == State.RECEIVED else Action.REISSUE_NOTICE
+        if perms.can(user, action, complaint):
+            extra: dict[str, Any] = {"outcome": Referral.Outcome.SUPERSEDED}
+            if state == State.AWAITING_REPORT and department == complaint.current_department:
+                extra = {"outcome": Referral.Outcome.NO_RESPONSE}  # a reminder to the same office
+            fields: dict[str, Any] = {"department": department}
+            if due_on:
+                fields["due_on"] = due_on
+            if state == State.AWAITING_REPORT:
+                fields |= extra
+            apply_transition(
+                complaint,
+                action,
+                user,
+                remarks=data.get("note", ""),
+                headline=data["headline"],
+                extra_documents=documents,
+                **fields,
+            )
+            return
+    add_stage(complaint, user, data["headline"], data.get("note", ""), documents)
 
 
 @login_required
@@ -418,6 +509,8 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         "label": ACTION_LABELS[action],
         "error": error,
         "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
+        "smart_departments": _smart_departments(complaint, action),
+        "stage_menu": _stage_menu(request, complaint, with_actions=action == perms.ADD_STAGE),
     }
     if request.POST.get("staged"):
         context |= _staged_context(
@@ -520,7 +613,7 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
     if not perms.can(request.user, perms.ADD_STAGE, complaint):
         return HttpResponseForbidden("You are not allowed to do this.")
     _decorate(complaint)
-    upload_page = {"complaint": complaint}
+    upload_page = {"complaint": complaint, "form": IntakeUploadForm()}
     types = _stage_type_choices(request.user, complaint)
     valid = {key for key, _ in types}
     meta = request.session.get(STAGE_SESSION_KEY)
@@ -532,7 +625,36 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         attachment = form.cleaned_data["file"]
         extraction = extract(attachment.content, attachment.mime_type)
         suggestion: dict[str, str] = {}
-        if extraction.text and extraction.typed is not False and llm.is_configured():
+        chosen_ai = form.cleaned_data["ai_provider"]
+        if chosen_ai == "sarvam_docs":
+            read = sarvam_docs.digitise(attachment.content, attachment.mime_type)
+            if read:  # the better reading replaces the scan reader's text on the document
+                extraction.text, extraction.typed = read, True
+                suggestion = read_document_as_stage(
+                    read,
+                    {
+                        "subject": complaint.subject,
+                        "state": complaint.get_current_state_display(),
+                        "department": str(complaint.current_department or "the SDM office"),
+                        "portal": portal_name(complaint),
+                    },
+                    [key for key, _ in types],
+                    provider="sarvam",
+                    mask=False,
+                )
+        elif chosen_ai == "openai_vision":
+            if llm.is_configured("openai"):
+                suggestion = read_document_images_as_stage(
+                    page_images(attachment.content, attachment.mime_type),
+                    {
+                        "subject": complaint.subject,
+                        "state": complaint.get_current_state_display(),
+                        "department": str(complaint.current_department or "the SDM office"),
+                        "portal": portal_name(complaint),
+                    },
+                    [key for key, _ in types],
+                )
+        elif extraction.text and chosen_ai != "none" and llm.is_configured(chosen_ai):
             current = complaint.current_department
             suggestion = read_document_as_stage(
                 extraction.text,
@@ -543,6 +665,8 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
                     "portal": portal_name(complaint),
                 },
                 [key for key, _ in types],
+                provider=chosen_ai,
+                known=_private_values(complaint),
             )
         meta = {
             "pk": complaint.pk,
@@ -553,6 +677,7 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
             "page_count": extraction.pages,
             "typed": extraction.typed,
             "suggestion": suggestion,
+            "ai_asked": chosen_ai,
         }
         request.session[STAGE_SESSION_KEY] = meta
         chosen = suggestion.get("action") or perms.ADD_STAGE
@@ -583,8 +708,10 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         "label": "Check what was read",
         "error": None,
         "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
-        "unread": meta.get("typed") is False or not meta.get("extracted_text"),
+        "unread": not ai and (meta.get("typed") is False or not meta.get("extracted_text")),
         "ai_used": bool(ai),
+        "smart_departments": _smart_departments(complaint, chosen),
+        "stage_menu": _stage_menu(request, complaint, with_actions=False),
     } | _staged_context(request, complaint, chosen, meta["sha"], ai.get("summary", ""))
     return render(request, "complaints/_action_form.html", context)
 
@@ -849,6 +976,12 @@ def document_download(request: HttpRequest, pk: int) -> FileResponse:
     return response
 
 
+def _private_values(complaint: Complaint) -> list[str]:
+    """The complainant's own details; they are masked out of anything sent to a model."""
+    c = complaint.complainant
+    return [c.name if c.name != "Unknown" else "", c.phone, c.address]
+
+
 @login_required
 @require_http_methods(["POST"])
 def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
@@ -863,6 +996,7 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
     if _officer_only(request.user):
         return HttpResponseForbidden("Summaries are not available on this login.")
     error = ""
+    offer_anyway = False
     if not document.summary:
         if not document.extracted_text:  # reports are uploaded without being read; read now
             with document.file.open("rb") as handle:
@@ -876,12 +1010,35 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
             document.extracted_text, document.is_typed = extraction.text, extraction.typed
         if not document.extracted_text.strip():
             error = "No text could be read from this document."
-        elif document.is_typed is False:
+        elif document.is_typed is False and not request.POST.get("force"):
             error = "This looks handwritten, so it is not summarised. Please read the original."
+            offer_anyway = True
         elif not llm.is_configured():
             error = "Summaries are switched off (no API key is set for the chosen provider)."
         else:
-            summary = summarise_report(document.extracted_text, document.get_kind_display())
+            summary = ""
+            complaint = document.complaint
+            if document.kind == Document.Kind.COMPLAINT:
+                # The complaint letter itself: read it once for the summary and the subject.
+                names = list(
+                    Village.objects.filter(office=complaint.office, is_active=True).values_list(
+                        "name", flat=True
+                    )
+                )
+                ai = extract_complaint_fields(
+                    document.extracted_text, names, known=_private_values(complaint)
+                )
+                summary = ai.get("summary", "")
+                subject = ai.get("subject", "")[:300]
+                placeholder = not complaint.subject or complaint.subject.startswith("Complaint ")
+                if subject and placeholder:
+                    Complaint.objects.filter(pk=complaint.pk).update(subject=subject)
+            else:
+                summary = summarise_report(
+                    document.extracted_text,
+                    document.get_kind_display(),
+                    known=_private_values(complaint),
+                )
             if summary:
                 Document.objects.filter(pk=document.pk).update(summary=summary)
                 document.summary = summary
@@ -890,7 +1047,7 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
     return render(
         request,
         "complaints/_document_summary.html",
-        {"document": document, "error": error},
+        {"document": document, "error": error, "offer_anyway": offer_anyway},
     )
 
 
@@ -909,7 +1066,45 @@ def intake_upload(request: HttpRequest) -> HttpResponse:
         attachment = form.cleaned_data["file"]
         extraction = extract(attachment.content, attachment.mime_type)
         sha = intake.stage_upload(attachment)
+        chosen_ai = form.cleaned_data["ai_provider"]
+        ai: dict[str, str] = {}
+        village_names: list[str] = []
+        if chosen_ai == "sarvam_docs":
+            village_names = list(
+                Village.objects.filter(office=request.user.office, is_active=True).values_list(
+                    "name", flat=True
+                )
+            )
+            read = sarvam_docs.digitise(attachment.content, attachment.mime_type)
+            if read:
+                extraction.text, extraction.latin_text, extraction.typed = read, read, True
+                ai = extract_complaint_fields_unmasked(read, village_names, provider="sarvam")
+        elif chosen_ai == "openai_vision" and llm.is_configured("openai"):
+            village_names = list(
+                Village.objects.filter(office=request.user.office, is_active=True).values_list(
+                    "name", flat=True
+                )
+            )
+            ai = extract_complaint_fields_from_images(
+                page_images(attachment.content, attachment.mime_type), village_names
+            )
+        elif extraction.text and chosen_ai != "none" and llm.is_configured(chosen_ai):
+            village_names = list(
+                Village.objects.filter(office=request.user.office, is_active=True).values_list(
+                    "name", flat=True
+                )
+            )
+            guess = intake.guess_fields(extraction.text, request.user.office, extraction.latin_text)
+            ai = extract_complaint_fields(
+                extraction.text,
+                village_names,
+                provider=chosen_ai,
+                known=[guess.name, guess.phone, guess.address],
+            )
         request.session[INTAKE_SESSION_KEY] = {
+            "ai": ai,
+            "ai_for": sha,
+            "ai_asked": chosen_ai,
             "sha": sha,
             "filename": attachment.filename,
             "extracted_text": extraction.text,
@@ -937,16 +1132,7 @@ def intake_review(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         form = IntakeForm(request.POST, office=office)
     else:
-        # Ask the model once per staged file; a page refresh must not call the API again.
-        # Handwritten letters are not sent to the model: it cannot read them reliably.
-        if attachment.typed is not False and meta.get("ai_for") != meta["sha"]:
-            village_names = list(
-                Village.objects.filter(office=office, is_active=True).values_list("name", flat=True)
-            )
-            ai = extract_complaint_fields(attachment.extracted_text, village_names)
-            if ai:
-                meta["ai"], meta["ai_for"] = ai, meta["sha"]
-                request.session[INTAKE_SESSION_KEY] = meta
+        # The model was asked once, when the file was uploaded (see intake_upload).
         intake.merge_ai_fields(guess, meta.get("ai", {}), office)
         form = IntakeForm(initial=guess.as_initial(), office=office)
 
@@ -977,7 +1163,7 @@ def intake_review(request: HttpRequest) -> HttpResponse:
             "duplicates": duplicates,
             "filename": attachment.filename,
             "text_status": attachment.text_status,
-            "handwritten": attachment.typed is False,
+            "handwritten": attachment.typed is False and not meta.get("ai"),
             "village_hint": guess.village_text if guess.village_id is None else "",
             "document_preview": attachment.extracted_text[:2000],
         },
@@ -1016,11 +1202,121 @@ def _save_intake(request: HttpRequest, cd: dict[str, Any], attachment, office) -
             related_to=cd["related_to"],
             attachment=attachment,
         )
+        if cd["description"]:  # the 50-75 word summary also belongs to the uploaded letter
+            Document.objects.filter(complaint=complaint, kind=Document.Kind.COMPLAINT).update(
+                summary=cd["description"][:2000]
+            )
         if cd["department"]:  # marking it starts the department's reply clock
             apply_transition(
                 complaint, Action.ISSUE_NOTICE, request.user, department=cd["department"]
             )
         return complaint
+
+
+# ------------------------------------------------------------------ legacy complaints
+
+
+def _legacy_job(request: HttpRequest, pk: int) -> LegacyImport:
+    return get_object_or_404(LegacyImport, pk=pk, office=request.user.office)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def legacy_upload(request: HttpRequest) -> HttpResponse:
+    """Upload a whole old file (10 to 150 pages); it is read in the background."""
+    if not perms.can(request.user, perms.REGISTER):
+        return HttpResponseForbidden("You are not allowed to register complaints.")
+    initial = {"reader": "sarvam", "analyser": "openai"}
+    form = LegacyUploadForm(request.POST or None, request.FILES or None, initial=initial)
+    error = ""
+    if request.method == "POST" and form.is_valid():
+        upload = form.cleaned_data["file"]
+        try:
+            job = legacy.create_import(
+                request.user.office,
+                request.user,
+                upload.read(),
+                upload.name,
+                form.cleaned_data["reader"],
+                form.cleaned_data["analyser"],
+            )
+        except legacy.LegacyError as exc:
+            error = str(exc)
+        else:
+            return redirect("complaints:legacy_status", pk=job.pk)
+    recent = LegacyImport.objects.filter(office=request.user.office)[:8]
+    return render(
+        request,
+        "complaints/legacy_upload.html",
+        {
+            "form": form,
+            "error": error,
+            "recent": recent,
+            "max_mb": settings.LEGACY_MAX_MB,
+            "max_pages": settings.LEGACY_MAX_PAGES,
+        },
+    )
+
+
+def _legacy_defaults(job: LegacyImport) -> dict[str, Any]:
+    fields = job.proposal.get("fields", {})
+    docs = job.proposal.get("documents", [])
+    dated = sorted(d["date"] for d in docs if d["date"])
+    village = Village.objects.filter(office=job.office, is_active=True)
+    match = village.filter(name__iexact=fields.get("village", "").strip()).first()
+    return {
+        "name": fields.get("name", ""),
+        "phone": fields.get("phone", ""),
+        "address": fields.get("address", ""),
+        "village": match.pk if match else None,
+        "subject": fields.get("subject", ""),
+        "description": fields.get("summary", ""),
+        "source_platform": "internal",
+        "received_on": dated[0] if dated else timezone.localdate().isoformat(),
+        "current_state": "awaiting",
+    }
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
+    """Progress while the file is read; the checking screen once it is ready."""
+    if not perms.can(request.user, perms.REGISTER):
+        return HttpResponseForbidden("You are not allowed to register complaints.")
+    job = _legacy_job(request, pk)
+    if job.status == LegacyImport.Status.DONE and job.complaint_id:
+        return redirect("complaints:detail", pk=job.complaint_id)
+    template = "complaints/legacy_status.html"
+    if job.status != LegacyImport.Status.READY:
+        if request.headers.get("HX-Request"):
+            template = "complaints/_legacy_progress.html"
+        return render(request, template, {"job": job})
+
+    docs = job.proposal.get("documents", [])
+    if request.method == "POST":
+        form = LegacyConfirmForm(request.POST, office=request.user.office)
+        kept = []
+        for number, item in enumerate(docs):
+            if request.POST.get(f"keep_{number}"):
+                headline = request.POST.get(f"headline_{number}", "").strip() or item["headline"]
+                kept.append(item | {"headline": headline[:150]})
+        if form.is_valid() and kept:
+            kept.sort(key=lambda d: (d["date"] or "9999", d["first"]))
+            try:
+                complaint = legacy.create_complaint(job, request.user, form.cleaned_data, kept)
+            except (legacy.LegacyError, DuplicateDocument) as exc:
+                form.add_error(None, str(exc))
+            else:
+                return redirect("complaints:detail", pk=complaint.pk)
+        elif not kept:
+            form.add_error(None, "Keep at least one document.")
+    else:
+        form = LegacyConfirmForm(initial=_legacy_defaults(job), office=request.user.office)
+    return render(
+        request,
+        "complaints/legacy_review.html",
+        {"job": job, "form": form, "docs": list(enumerate(docs))},
+    )
 
 
 # ------------------------------------------------------------------ overdue

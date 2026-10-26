@@ -161,7 +161,7 @@ def test_dashboard_period_filter(clerk, make_complaint):
     old = make_complaint()
     old.received_on = timezone.localdate() - timedelta(days=200)
     old.save()
-    make_complaint()
+    make_complaint(received_on=timezone.localdate())  # the fixture's fixed date ages out
     assert build_dashboard(visible_complaints(clerk), "30")["total"] == 1
     assert build_dashboard(visible_complaints(clerk), "365")["total"] == 2
     assert build_dashboard(visible_complaints(clerk), "nonsense")["range_key"] == "90"

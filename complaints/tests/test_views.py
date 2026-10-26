@@ -123,9 +123,12 @@ def test_detail_full_page_and_htmx_pane(login, clerk, awaiting):
 
 
 def test_detail_only_offers_actions_valid_for_the_state_and_role(login, clerk, reviewer, awaiting):
-    url = reverse("complaints:detail", args=[awaiting.pk])
-    as_clerk = login(clerk).get(url).content.decode()
-    assert "Record a report received" in as_clerk and "Ask for the report again" in as_clerk
+    as_clerk = (
+        login(clerk)
+        .get(reverse("complaints:action", args=[awaiting.pk, "add_stage"]), **HX)
+        .content.decode()
+    )
+    assert "Record a report received" in as_clerk  # re-marking is done by typing @office
     assert "Mark to an officer for report" not in as_clerk and "Accept the report" not in as_clerk
     assert "Re-open the complaint" not in as_clerk
 
@@ -365,7 +368,8 @@ def test_full_loop_through_the_ui(login, clerk, reviewer, complaint, tehsildar):
     assert c.current_state == State.CLOSED
     detail = login(reviewer).get(reverse("complaints:detail", args=[c.pk])).content.decode()
     assert "Complaint closed on CM Window portal" in detail
-    assert "Re-open the complaint" in detail
+    composer = login(reviewer).get(action_url(c, "add_stage"), **HX).content.decode()
+    assert "Re-open the complaint" in composer
 
 
 # -------------------------------------------------------------- documents
@@ -513,8 +517,9 @@ def test_overdue_page_lists_portal_rejections_waiting_for_action(
 # ------------------------------------------------------------------ intake
 
 
-def upload_step(client, body=b"complaint-one"):
-    return client.post(reverse("complaints:intake_upload"), {"file": pdf("complaint.pdf", body)})
+def upload_step(client, body=b"complaint-one", **extra):
+    data = {"file": pdf("complaint.pdf", body)} | extra
+    return client.post(reverse("complaints:intake_upload"), data)
 
 
 def intake_data(village, **over):
@@ -748,7 +753,7 @@ def test_document_summary_is_made_once_and_kept(
     calls = []
     monkeypatch.setattr(
         "complaints.views.summarise_report",
-        lambda text, kind: calls.append(kind) or "Drain cleaned after inquiry.",
+        lambda text, kind, **k: calls.append(kind) or "Drain cleaned after inquiry.",
     )
     url = reverse("complaints:document_summary", args=[doc.pk])
     for _ in range(2):
@@ -766,7 +771,7 @@ def test_document_summary_failure_is_not_saved(
     doc = make_document(complaint)
     doc.extracted_text = "Some text."
     doc.save()
-    monkeypatch.setattr("complaints.views.summarise_report", lambda text, kind: None)
+    monkeypatch.setattr("complaints.views.summarise_report", lambda text, kind, **k: None)
     response = login(clerk).post(reverse("complaints:document_summary", args=[doc.pk]))
     assert "could not be made" in response.content.decode()
     doc.refresh_from_db()
