@@ -1,6 +1,5 @@
 """Legacy complaints: a big scanned file becomes a complaint with its whole history."""
 
-import json
 from datetime import date
 
 import pytest
@@ -8,8 +7,7 @@ from django.urls import reverse
 
 from complaints.models import Complaint, LegacyImport, State
 from complaints.services import file_splitter as fs
-from complaints.services import legacy, llm, sarvam_docs
-from complaints.tests.test_llm import FakeResponse
+from complaints.services import legacy
 from complaints.tests.test_views import login, pdf  # noqa: F401,F811 - fixtures/helpers
 
 PAGES = ["complaint email", "DC forwards", "SDM letter", "reminder"]
@@ -25,9 +23,11 @@ FIELDS = {
 
 @pytest.fixture
 def fake_ai(monkeypatch, settings):
-    settings.OPENAI_API_KEY, settings.SARVAM_API_KEY = "k", "k"
+    settings.OPENAI_API_KEY = "k"
     monkeypatch.setattr(legacy, "count_pages", lambda content: len(PAGES))
-    monkeypatch.setattr(sarvam_docs, "digitise_pages", lambda content, mime, **k: list(PAGES))
+    reads = iter(PAGES)
+    monkeypatch.setattr(legacy, "page_images", lambda *a, **k: [b"image"])
+    monkeypatch.setattr(legacy.llm, "read_page", lambda image: next(reads))
     monkeypatch.setattr(
         fs,
         "split_pdf",
@@ -41,13 +41,13 @@ def fake_ai(monkeypatch, settings):
         ),
         fs.Segment(2, 2, "forwarding", date(2025, 10, 13), "DC", "SDM", "Forwarded", ""),
     ]
-    monkeypatch.setattr(fs, "segment_pages", lambda pages, provider="x", **k: segments)
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: segments)
     monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "A fifty word summary.")
     monkeypatch.setattr(legacy, "extract_complaint_fields_unmasked", lambda *a, **k: dict(FIELDS))
 
 
 def upload(client, **extra):
-    data = {"file": pdf("old.pdf"), "reader": "sarvam", "analyser": "openai"} | extra
+    data = {"file": pdf("old.pdf"), "reader": "chatgpt"} | extra
     return client.post(reverse("complaints:legacy_upload"), data)
 
 
@@ -139,7 +139,7 @@ def test_a_closed_legacy_complaint_needs_a_reason(login, clerk, village, fake_ai
 
 
 def test_an_unreadable_file_fails_with_a_plain_message(login, clerk, fake_ai, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(sarvam_docs, "digitise_pages", lambda *a, **k: None)
+    monkeypatch.setattr(legacy.llm, "read_page", lambda image: None)
     client = login(clerk)
     response = upload(client)
     job = LegacyImport.objects.get()
@@ -147,36 +147,9 @@ def test_an_unreadable_file_fails_with_a_plain_message(login, clerk, fake_ai, mo
     assert "credit" in client.get(response["Location"]).content.decode()
 
 
-def test_only_pdfs_and_configured_ais_are_accepted(login, clerk, fake_ai, settings):  # noqa: F811
-    client = login(clerk)
-    bad = client.post(
-        reverse("complaints:legacy_upload"),
-        {
-            "file": pdf("x.pdf", b"")._set_name("x") or pdf(),
-            "reader": "sarvam",
-            "analyser": "anthropic",
-        },
+def test_an_import_needs_the_openai_key(login, clerk, fake_ai, settings):  # noqa: F811
+    settings.OPENAI_API_KEY = ""
+    bad = login(clerk).post(
+        reverse("complaints:legacy_upload"), {"file": pdf("x.pdf"), "reader": "chatgpt"}
     )
-    assert "no key" in bad.content.decode() and LegacyImport.objects.count() == 0
-
-
-def test_claude_requests_use_the_messages_api(monkeypatch, settings):
-    settings.ANTHROPIC_API_KEY, settings.ANTHROPIC_MODEL = "ak", "claude-sonnet-5-5"
-    seen = {}
-
-    class Resp(FakeResponse):
-        def __init__(self):
-            self.body = json.dumps(
-                {"content": [{"type": "text", "text": '```json\n{"a": 1}\n```'}]}
-            ).encode()
-
-    def fake_urlopen(request, timeout=None):
-        seen["url"], seen["headers"] = request.full_url, dict(request.header_items())
-        seen["body"] = json.loads(request.data)
-        return Resp()
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    out = llm.complete("hi", max_tokens=100, as_json=True, provider_name="anthropic")
-    assert out == '{"a": 1}'
-    assert seen["url"] == "https://api.anthropic.com/v1/messages"
-    assert seen["headers"]["X-api-key"] == "ak" and seen["body"]["max_tokens"] == 100
+    assert "OPENAI_API_KEY" in bad.content.decode() and LegacyImport.objects.count() == 0

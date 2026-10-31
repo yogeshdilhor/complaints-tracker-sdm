@@ -108,24 +108,14 @@ PAGE_SIZE = 25
 INTAKE_OCR_MAX_PAGES = 6
 
 # Optional AI reading of typed letters and reports. No key for the chosen provider = off.
-# LLM_PROVIDER is "openai" or "sarvam"; change it (and restart) to switch.
-LLM_PROVIDER = env("LLM_PROVIDER", default="openai")
+# Every language-model call goes to OpenAI's gpt-6-luna (fixed in complaints/services/llm.py).
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
-OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6-luna")
-# Model used when you choose "ChatGPT reads the page images" at upload (needs to see images).
-OPENAI_VISION_MODEL = env("OPENAI_VISION_MODEL", default="gpt-4.1-mini")
 VISION_MAX_PAGES = env.int("VISION_MAX_PAGES", default=6)
-# Claude (Anthropic), one of the models that can analyse a long legacy file.
-ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
-ANTHROPIC_MODEL = env("ANTHROPIC_MODEL", default="claude-sonnet-5-5")
 # Legacy complaints: big scanned files, read in the background.
 LEGACY_MAX_MB = env.int("LEGACY_MAX_MB", default=150)
 LEGACY_MAX_PAGES = env.int("LEGACY_MAX_PAGES", default=150)
 LEGACY_RUN_INLINE = env.bool("LEGACY_RUN_INLINE", default=False)  # tests run it in the request
 OPENAI_REASONING_EFFORT = env("OPENAI_REASONING_EFFORT", default="")  # "" = model default
-SARVAM_API_KEY = env("SARVAM_API_KEY", default="")
-SARVAM_MODEL = env("SARVAM_MODEL", default="sarvam-105b")
-SARVAM_REASONING_EFFORT = env("SARVAM_REASONING_EFFORT", default="off")  # off = no thinking
 # Scanned pages read below this Tesseract confidence (0-100) are treated as handwriting.
 TYPED_MIN_OCR_CONFIDENCE = env.int("TYPED_MIN_OCR_CONFIDENCE", default=70)
 

@@ -1,4 +1,4 @@
-"""Short 50-75 word summaries of letters and reports from a small language model (OpenAI or Sarvam).
+"""Short 50-75 word summaries of letters and reports from OpenAI's gpt-6-luna.
 
 Best effort: without an API key, or when the call fails, callers keep the full text.
 """
@@ -36,9 +36,8 @@ def _complete(
     *,
     max_tokens: int = MAX_OUTPUT_TOKENS,
     as_json: bool = False,
-    provider: str | None = None,
 ):
-    return llm.complete(prompt, max_tokens=max_tokens, as_json=as_json, provider_name=provider)
+    return llm.complete(prompt, max_tokens=max_tokens, as_json=as_json)
 
 
 def _masked(text: str, known: list[str] | None) -> str:
@@ -53,13 +52,10 @@ def summarise_description(text: str, known: list[str] | None = None) -> str:
     return _complete(PROMPT.format(text=_masked(text, known))) or text
 
 
-def summarise_report(
-    text: str, kind: str, known: list[str] | None = None, provider: str | None = None
-) -> str | None:
+def summarise_report(text: str, kind: str, known: list[str] | None = None) -> str | None:
     """A 50-75 word summary of a document's text; None if it could not be made."""
     return _complete(
         REPORT_PROMPT.format(kind=kind, text=_masked(text[:REPORT_MAX_CHARS], known)),
-        provider=provider,
     )
 
 
@@ -83,7 +79,6 @@ FIELDS_PROMPT = (
 def extract_complaint_fields(
     text: str,
     village_names: list[str],
-    provider: str | None = None,
     known: list[str] | None = None,
 ) -> dict[str, str]:
     """Summary, subject, name, phone, address, village and tag read from a letter by the model.
@@ -96,7 +91,6 @@ def extract_complaint_fields(
         ),
         max_tokens=FIELDS_MAX_TOKENS,
         as_json=True,
-        provider=provider,
     )
     if not raw:
         return {}
@@ -147,7 +141,6 @@ def read_document_as_stage(
     text: str,
     context: dict[str, str],
     allowed: list[str],
-    provider: str | None = None,
     known: list[str] | None = None,
     mask: bool = True,
 ) -> dict[str, str]:
@@ -164,7 +157,6 @@ def read_document_as_stage(
         ),
         max_tokens=STAGE_MAX_TOKENS,
         as_json=True,
-        provider=provider,
     )
     if not raw:
         return {}
@@ -205,7 +197,7 @@ VISION_FIELDS_PROMPT = (
 def extract_complaint_fields_from_images(
     images: list[bytes], village_names: list[str]
 ) -> dict[str, str]:
-    """Like extract_complaint_fields, but the model looks at the page images (OpenAI only)."""
+    """Like extract_complaint_fields, but the model looks at the page images ."""
     raw = llm.complete_with_images(
         VISION_FIELDS_PROMPT.format(villages=", ".join(village_names[:300])),
         images,
@@ -247,11 +239,9 @@ def read_document_images_as_stage(
     return result
 
 
-def extract_complaint_fields_unmasked(
-    text: str, village_names: list[str], provider: str | None = None
-) -> dict[str, str]:
+def extract_complaint_fields_unmasked(text: str, village_names: list[str]) -> dict[str, str]:
     """Fields from text that is already as exposed as it can be (the pages were sent to
-    Sarvam for reading), so nothing is masked and the model may read the name, phone and
+    ChatGPT for reading), so nothing is masked and the model may read the name, phone and
     address as well."""
     prompt = VISION_FIELDS_PROMPT.replace(
         "These are the pages of a complaint letter", "Below is the text of a complaint letter"
@@ -261,7 +251,6 @@ def extract_complaint_fields_unmasked(
         + f"\n\nLetter:\n{text[:FIELDS_MAX_CHARS]}",
         max_tokens=FIELDS_MAX_TOKENS,
         as_json=True,
-        provider=provider,
     )
     if not raw:
         return {}

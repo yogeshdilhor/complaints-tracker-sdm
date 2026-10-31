@@ -4,7 +4,6 @@ from datetime import date
 from typing import Any
 
 from django import forms
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
@@ -485,12 +484,7 @@ class EditDetailsForm(forms.Form):
 
 
 AI_CHOICES = [
-    ("openai", "ChatGPT (OpenAI)"),
-    ("sarvam", "Sarvam AI"),
-    (
-        "sarvam_docs",
-        "Sarvam reading the pages (best for Hindi handwriting; sends the pages unmasked)",
-    ),
+    ("openai", "ChatGPT (gpt-6-luna)"),
     (
         "openai_vision",
         "ChatGPT reading page images (sends the pages unmasked)",
@@ -505,12 +499,12 @@ class IntakeUploadForm(forms.Form):
         choices=AI_CHOICES,
         widget=forms.RadioSelect,
         label="Read and summarise with",
-        initial=lambda: settings.LLM_PROVIDER,
+        initial="openai",
         required=False,
     )
 
     def clean_ai_provider(self) -> str:
-        return self.cleaned_data.get("ai_provider") or settings.LLM_PROVIDER
+        return self.cleaned_data.get("ai_provider") or "openai"
 
 
 class IntakeForm(forms.Form):
@@ -561,11 +555,6 @@ class LegacyUploadForm(forms.Form):
     file = forms.FileField(label="The whole file as one PDF")
     reader = forms.ChoiceField(
         choices=legacy.READERS, widget=forms.RadioSelect, label="Read the pages with"
-    )
-    analyser = forms.ChoiceField(
-        choices=legacy.ANALYSERS,
-        widget=forms.RadioSelect,
-        label="Work out the documents and summarise with",
     )
 
 

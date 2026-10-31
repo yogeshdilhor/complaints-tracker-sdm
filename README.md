@@ -197,11 +197,8 @@ All configuration is through environment variables, read from `.env` if present.
 | `CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins, prod settings only |
 | `SECURE_SSL_REDIRECT` | `True` | prod settings only |
 | `SECURE_HSTS_SECONDS` | `31536000` | prod settings only |
-| `LLM_PROVIDER` | `openai` | Which AI provider reads typed letters and reports: `openai` or `sarvam`. Switch by changing this and restarting |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | empty, `gpt-6-luna` | OpenAI key and model. No key for the chosen provider = no AI; the full text is used |
+| `OPENAI_API_KEY` | empty | OpenAI key. Every AI call uses `gpt-6-luna` (fixed in code). No key = no AI; the full text is used |
 | `OPENAI_REASONING_EFFORT` | empty | Optional thinking level for reasoning models; empty = leave unset (use empty for non-reasoning models) |
-| `SARVAM_API_KEY`, `SARVAM_MODEL` | empty, `sarvam-105b` | Sarvam key and model |
-| `SARVAM_REASONING_EFFORT` | `off` | `off` turns Sarvam's thinking off (cheaper, enough for summaries); or `low`, `medium`, `high` |
 | `TYPED_MIN_OCR_CONFIDENCE` | `70` | Scanned pages read below this confidence (0-100) count as handwriting and are not sent to the AI |
 | `OFFICER_LOGIN_DAYS` | `30` | How long a new officer login lasts, and how far "+30 days" extends it |
 | `MAX_OFFICER_LOGINS` | `0` | Most officer logins that may be active at once; `0` means no limit |

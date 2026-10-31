@@ -25,10 +25,10 @@ def awaiting(make_complaint, clerk, tehsildar):
 @pytest.fixture
 def ai(monkeypatch, settings):
     """A model that reads the document as a report from the Tehsildar."""
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     seen = []
 
-    def fake(text, context, allowed, provider=None, known=None):
+    def fake(text, context, allowed, known=None):
         seen.append((text, context, allowed))
         return {
             "action": "record_report",
@@ -138,7 +138,7 @@ def test_a_custom_stage_from_a_document(client, clerk, awaiting, ai):
 def test_a_handwritten_document_is_still_read_but_flagged(
     client, clerk, awaiting, monkeypatch, settings
 ):
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
         "complaints.views.read_document_as_stage", lambda *a, **k: calls.append(a) or {}
@@ -153,7 +153,7 @@ def test_a_handwritten_document_is_still_read_but_flagged(
 
 
 def test_without_a_key_the_form_still_works_by_hand(client, clerk, awaiting, monkeypatch, settings):
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
+    settings.OPENAI_API_KEY = ""
     monkeypatch.setattr(
         "complaints.views.extract", lambda content, mime: Extraction("typed", "done", 1, typed=True)
     )

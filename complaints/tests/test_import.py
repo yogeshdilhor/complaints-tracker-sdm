@@ -237,7 +237,7 @@ def test_the_ai_pass_fills_gaps_without_overwriting(
     from complaints.management.commands import reread_complaints as rr
 
     run(folder, actor=clerk)
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     c = Complaint.objects.get(external_ref="SRS-3333333333")
     kept_village = str(c.village)
     other = Complaint.objects.get(external_ref="SRS-1111111111")
@@ -272,10 +272,10 @@ def test_the_ai_pass_needs_a_key_and_skips_what_is_done(
     from complaints.management.commands import reread_complaints as rr
 
     run(folder, actor=clerk)
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
+    settings.OPENAI_API_KEY = ""
     with pytest.raises(CommandError):
         call_command("reread_complaints", stdout=io.StringIO())
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
         rr, "extract_complaint_fields", lambda t, v, **k: calls.append(1) or {"summary": "s"}
@@ -292,7 +292,7 @@ def test_the_ai_pass_stops_when_the_ai_is_not_answering(
     from complaints.management.commands import reread_complaints as rr
 
     run(folder, actor=clerk)
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     monkeypatch.setattr(rr, "extract_complaint_fields", lambda t, v, **k: {})
     with pytest.raises(CommandError):
         call_command("reread_complaints", stdout=io.StringIO())
@@ -305,7 +305,7 @@ def test_the_ai_pass_leaves_out_handwritten_and_poorly_read_letters(
 
     run(folder, actor=clerk)
     Document.objects.update(is_typed=False)
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "k", "openai"
+    settings.OPENAI_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
         rr, "extract_complaint_fields", lambda t, v, **k: calls.append(1) or {"summary": "s"}

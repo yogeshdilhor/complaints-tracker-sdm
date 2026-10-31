@@ -1,9 +1,9 @@
 """Legacy complaints: one big scanned file in, a complaint with its whole history out.
 
-The file is read in the background: pages are read (Sarvam's page reader, or the free local
-reader), a model works out which pages form which document, each document is summarised, and
-the result waits for the user to check it. Only then is the complaint created, with one
-dated timeline stage and one PDF per document.
+The file is read in the background: pages are read (by ChatGPT looking at the page images, or
+the free local reader), a model works out which pages form which document, each document is
+summarised, and the result waits for the user to check it. Only then is the complaint created,
+with one dated timeline stage and one PDF per document.
 """
 
 from __future__ import annotations
@@ -28,17 +28,16 @@ from complaints.models import (
     LegacyImport,
     Tag,
 )
-from complaints.services import file_splitter, llm, sarvam_docs
+from complaints.services import file_splitter, llm
 from complaints.services.description_summary import (
     REPORT_PROMPT,
     extract_complaint_fields_unmasked,
 )
-from complaints.services.documents import Attachment, extract, store_document
+from complaints.services.documents import Attachment, extract, page_images, store_document
 from complaints.workflow import Action, add_stage, apply_transition, register_complaint
 
 logger = logging.getLogger(__name__)
 
-SARVAM_BATCH = 10  # Sarvam reads at most 10 pages per job
 SUMMARY_CHARS = 12000
 SUMMARY_TOKENS = 400
 TAG_LEGACY = "Legacy - verify"
@@ -64,13 +63,8 @@ KIND_LABEL = {
     "other": "Document",
 }
 READERS = [
-    ("sarvam", "Sarvam page reader (best for Hindi and handwriting; about ₹0.5 a page)"),
+    ("chatgpt", "ChatGPT gpt-6-luna reads the page images (best for Hindi and handwriting)"),
     ("local", "Local reader (free, but poor on handwriting)"),
-]
-ANALYSERS = [
-    ("openai", "ChatGPT (OpenAI)"),
-    ("anthropic", "Claude (Anthropic)"),
-    ("sarvam", "Sarvam AI"),
 ]
 
 
@@ -92,7 +86,7 @@ def count_pages(content: bytes) -> int:
     return int(match.group(1)) if match else 0
 
 
-def create_import(office, user, content: bytes, filename: str, reader: str, analyser: str):
+def create_import(office, user, content: bytes, filename: str, reader: str):
     """Validate and store the file, then queue the reading. Raises LegacyError."""
     if not content.startswith(b"%PDF"):
         raise LegacyError("Please upload a PDF. Scan all pages into one file.")
@@ -103,10 +97,10 @@ def create_import(office, user, content: bytes, filename: str, reader: str, anal
         raise LegacyError("This PDF could not be opened.")
     if pages > settings.LEGACY_MAX_PAGES:
         raise LegacyError(f"The file has {pages} pages; the limit is {settings.LEGACY_MAX_PAGES}.")
-    if analyser not in dict(ANALYSERS) or not llm.is_configured(analyser):
-        raise LegacyError("The chosen AI has no key set in the .env file.")
-    if reader == "sarvam" and not sarvam_docs.is_configured():
-        raise LegacyError("The Sarvam page reader needs SARVAM_API_KEY.")
+    if reader not in dict(READERS):
+        raise LegacyError("Please choose how the pages are read.")
+    if not llm.is_configured():
+        raise LegacyError("OPENAI_API_KEY is not set in the .env file.")
     import hashlib
 
     sha = hashlib.sha256(content).hexdigest()
@@ -121,7 +115,7 @@ def create_import(office, user, content: bytes, filename: str, reader: str, anal
         file=path,
         size_bytes=len(content),
         reader=reader,
-        analyser=analyser,
+        analyser="openai",
         pages_total=pages,
     )
     start(job)
@@ -155,33 +149,27 @@ def _set(job: LegacyImport, **fields: Any) -> None:
 def _read_pages(job: LegacyImport, content: bytes) -> list[str]:
     total = job.pages_total
     pages: list[str] = []
-    failed_batches = 0
-    for first in range(1, total + 1, SARVAM_BATCH if job.reader == "sarvam" else 1):
-        last = min(first + (SARVAM_BATCH if job.reader == "sarvam" else 1) - 1, total)
-        part = content if job.reader == "sarvam" and total <= SARVAM_BATCH else None
-        if part is None:
-            part = file_splitter.split_pdf(content, first, last)
-        got: list[str] | None = None
-        if part is not None:
-            if job.reader == "sarvam":
-                got = sarvam_docs.digitise_pages(part, "application/pdf")
-            else:
-                got = [extract(part, "application/pdf").text.strip()]
-        if not got or len(got) != last - first + 1:
-            failed_batches += 1
-            got = [""] * (last - first + 1)
-        pages.extend(got)
+    failed = 0
+    for number in range(1, total + 1):
+        part = file_splitter.split_pdf(content, number, number)
+        text: str | None = None
+        if part is not None and job.reader == "chatgpt":
+            images = page_images(part, "application/pdf", max_pages=1)
+            text = llm.read_page(images[0]) if images else None
+        elif part is not None:
+            text = extract(part, "application/pdf").text.strip()
+        if text is None:
+            failed += 1
+        pages.append((text or "").strip())
         _set(job, pages_done=len(pages), step_note=f"Read {len(pages)} of {total} pages")
-    if failed_batches and not any(pages):
-        raise LegacyError(
-            "No page could be read. If you chose the Sarvam reader, check its credit balance."
-        )
+    if failed == total:
+        raise LegacyError("No page could be read. Check the OpenAI key and credit balance.")
     return pages
 
 
-def _summarise(text: str, kind: str, provider: str) -> str:
+def _summarise(text: str, kind: str) -> str:
     prompt = REPORT_PROMPT.format(kind=KIND_LABEL.get(kind, "document"), text=text[:SUMMARY_CHARS])
-    return llm.complete(prompt, max_tokens=SUMMARY_TOKENS, provider_name=provider) or ""
+    return llm.complete(prompt, max_tokens=SUMMARY_TOKENS) or ""
 
 
 def run(job_id: int) -> None:
@@ -198,9 +186,9 @@ def run(job_id: int) -> None:
             status=LegacyImport.Status.ANALYSING,
             step_note="Working out which pages are which document",
         )
-        segments = file_splitter.segment_pages(pages, job.analyser, with_summaries=False)
+        segments = file_splitter.segment_pages(pages, with_summaries=False)
         if not segments:  # one more try: a model sometimes answers badly the first time
-            segments = file_splitter.segment_pages(pages, job.analyser, with_summaries=False)
+            segments = file_splitter.segment_pages(pages, with_summaries=False)
         if not segments:
             raise LegacyError("The AI could not work out the documents in this file. Try again.")
         today = timezone.localdate()
@@ -221,7 +209,7 @@ def run(job_id: int) -> None:
                     "sender": s.sender,
                     "to": s.to,
                     "headline": s.headline,
-                    "summary": _summarise(text, s.kind, job.analyser) if text.strip() else "",
+                    "summary": _summarise(text, s.kind) if text.strip() else "",
                 }
             )
         original = next((s for s in segments if s.kind == "complaint"), segments[0])
@@ -231,7 +219,6 @@ def run(job_id: int) -> None:
         fields = extract_complaint_fields_unmasked(
             "\n\n".join(pages[original.first - 1 : original.last]),
             village_names,
-            provider=job.analyser,
         )
         _set(
             job,

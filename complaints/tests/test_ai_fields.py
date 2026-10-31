@@ -27,7 +27,7 @@ def test_extract_fields_gives_nothing_when_the_call_or_reply_is_bad(monkeypatch,
 
 
 def test_extract_fields_does_nothing_without_a_key(settings):
-    settings.OPENAI_API_KEY, settings.LLM_PROVIDER = "", "openai"
+    settings.OPENAI_API_KEY = ""
     assert ai.extract_complaint_fields("letter", []) == {}
 
 

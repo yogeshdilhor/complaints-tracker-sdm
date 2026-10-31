@@ -91,9 +91,7 @@ def _repair(segments: list[Segment], page_count: int) -> list[Segment]:
     return cleaned
 
 
-def segment_pages(
-    pages: list[str], provider: str = "sarvam", with_summaries: bool = True
-) -> list[Segment]:
+def segment_pages(pages: list[str], with_summaries: bool = True) -> list[Segment]:
     """Ask the model which pages form which document. [] if the reply is unusable."""
     per_page = max(350, min(PAGE_CHARS, TOTAL_PAGE_CHARS // max(len(pages), 1)))
     numbered = "\n\n".join(f"=== PAGE {i} ===\n{t[:per_page]}" for i, t in enumerate(pages, 1))
@@ -106,7 +104,6 @@ def segment_pages(
         ),
         max_tokens=MAX_TOKENS if with_summaries else MAX_TOKENS_SPLIT_ONLY,
         as_json=True,
-        provider_name=provider,
     )
     if not raw:
         return []

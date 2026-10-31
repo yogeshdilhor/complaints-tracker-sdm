@@ -1,8 +1,8 @@
 """Turn one complaint's compiled file into a timeline: one stage per document.
 
-Sarvam reads the pages, the model works out which pages are the original complaint, the SDM's
+The model (gpt-6-luna) reads the pages, works out which pages are the original complaint, the SDM's
 letters, replies and so on, each document is saved as its own PDF, and each becomes a stage
-dated by the date written on it. The compiled file stays where it is. Pages go to Sarvam
+dated by the date written on it. The compiled file stays where it is. Pages go to OpenAI
 unmasked. Use --dry-run to see the split without saving anything.
 """
 
@@ -12,7 +12,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from complaints.models import Complaint
-from complaints.services import file_splitter, legacy, sarvam_docs
+from complaints.services import file_splitter, legacy, llm
+from complaints.services.documents import page_images
 from core.models import User
 
 
@@ -36,12 +37,17 @@ class Command(BaseCommand):
             raise CommandError("The complaint has no PDF to split.")
         with source.file.open("rb") as handle:
             content = handle.read()
-        # A file already read by Sarvam keeps its pages in the stored text, split by "---".
+        # A file already read page by page keeps its pages in the stored text, split by "---".
         pages = [p.strip() for p in source.extracted_text.split("\n---\n")]
         if source.page_count != len(pages) or not source.extracted_text.strip():
-            pages = sarvam_docs.digitise_pages(content, source.mime_type)
-        if not pages:
-            raise CommandError("Sarvam could not read the file.")
+            pages = [
+                (llm.read_page(image) or "").strip()
+                for image in page_images(
+                    content, source.mime_type, max_pages=source.page_count or 150
+                )
+            ]
+        if not any(pages):
+            raise CommandError("The pages could not be read. Check OPENAI_API_KEY.")
         self.stdout.write(f"{len(pages)} pages read.")
         segments = file_splitter.segment_pages(pages)
         if not segments:

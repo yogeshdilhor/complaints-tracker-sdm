@@ -46,13 +46,12 @@ from complaints.models import (
     State,
     Tag,
 )
-from complaints.services import intake, legacy, llm, logins, sarvam_docs
+from complaints.services import intake, legacy, llm, logins
 from complaints.services import notifications as notification_service
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
     extract_complaint_fields,
     extract_complaint_fields_from_images,
-    extract_complaint_fields_unmasked,
     read_document_as_stage,
     read_document_images_as_stage,
     summarise_report,
@@ -626,24 +625,8 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         extraction = extract(attachment.content, attachment.mime_type)
         suggestion: dict[str, str] = {}
         chosen_ai = form.cleaned_data["ai_provider"]
-        if chosen_ai == "sarvam_docs":
-            read = sarvam_docs.digitise(attachment.content, attachment.mime_type)
-            if read:  # the better reading replaces the scan reader's text on the document
-                extraction.text, extraction.typed = read, True
-                suggestion = read_document_as_stage(
-                    read,
-                    {
-                        "subject": complaint.subject,
-                        "state": complaint.get_current_state_display(),
-                        "department": str(complaint.current_department or "the SDM office"),
-                        "portal": portal_name(complaint),
-                    },
-                    [key for key, _ in types],
-                    provider="sarvam",
-                    mask=False,
-                )
-        elif chosen_ai == "openai_vision":
-            if llm.is_configured("openai"):
+        if chosen_ai == "openai_vision":
+            if llm.is_configured():
                 suggestion = read_document_images_as_stage(
                     page_images(attachment.content, attachment.mime_type),
                     {
@@ -654,7 +637,7 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
                     },
                     [key for key, _ in types],
                 )
-        elif extraction.text and chosen_ai != "none" and llm.is_configured(chosen_ai):
+        elif extraction.text and chosen_ai != "none" and llm.is_configured():
             current = complaint.current_department
             suggestion = read_document_as_stage(
                 extraction.text,
@@ -665,7 +648,6 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
                     "portal": portal_name(complaint),
                 },
                 [key for key, _ in types],
-                provider=chosen_ai,
                 known=_private_values(complaint),
             )
         meta = {
@@ -1069,17 +1051,7 @@ def intake_upload(request: HttpRequest) -> HttpResponse:
         chosen_ai = form.cleaned_data["ai_provider"]
         ai: dict[str, str] = {}
         village_names: list[str] = []
-        if chosen_ai == "sarvam_docs":
-            village_names = list(
-                Village.objects.filter(office=request.user.office, is_active=True).values_list(
-                    "name", flat=True
-                )
-            )
-            read = sarvam_docs.digitise(attachment.content, attachment.mime_type)
-            if read:
-                extraction.text, extraction.latin_text, extraction.typed = read, read, True
-                ai = extract_complaint_fields_unmasked(read, village_names, provider="sarvam")
-        elif chosen_ai == "openai_vision" and llm.is_configured("openai"):
+        if chosen_ai == "openai_vision" and llm.is_configured():
             village_names = list(
                 Village.objects.filter(office=request.user.office, is_active=True).values_list(
                     "name", flat=True
@@ -1088,7 +1060,7 @@ def intake_upload(request: HttpRequest) -> HttpResponse:
             ai = extract_complaint_fields_from_images(
                 page_images(attachment.content, attachment.mime_type), village_names
             )
-        elif extraction.text and chosen_ai != "none" and llm.is_configured(chosen_ai):
+        elif extraction.text and chosen_ai != "none" and llm.is_configured():
             village_names = list(
                 Village.objects.filter(office=request.user.office, is_active=True).values_list(
                     "name", flat=True
@@ -1098,7 +1070,6 @@ def intake_upload(request: HttpRequest) -> HttpResponse:
             ai = extract_complaint_fields(
                 extraction.text,
                 village_names,
-                provider=chosen_ai,
                 known=[guess.name, guess.phone, guess.address],
             )
         request.session[INTAKE_SESSION_KEY] = {
@@ -1226,7 +1197,7 @@ def legacy_upload(request: HttpRequest) -> HttpResponse:
     """Upload a whole old file (10 to 150 pages); it is read in the background."""
     if not perms.can(request.user, perms.REGISTER):
         return HttpResponseForbidden("You are not allowed to register complaints.")
-    initial = {"reader": "sarvam", "analyser": "openai"}
+    initial = {"reader": "chatgpt"}
     form = LegacyUploadForm(request.POST or None, request.FILES or None, initial=initial)
     error = ""
     if request.method == "POST" and form.is_valid():
@@ -1238,7 +1209,6 @@ def legacy_upload(request: HttpRequest) -> HttpResponse:
                 upload.read(),
                 upload.name,
                 form.cleaned_data["reader"],
-                form.cleaned_data["analyser"],
             )
         except legacy.LegacyError as exc:
             error = str(exc)
