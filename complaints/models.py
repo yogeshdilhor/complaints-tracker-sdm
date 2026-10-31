@@ -417,6 +417,9 @@ class LegacyImport(models.Model):
     filename = models.CharField(max_length=255)
     sha256 = models.CharField(max_length=64)
     file = models.CharField(max_length=300)
+    # "application/pdf" for the usual multi-page scan; also accepts a single JPG/PNG photo,
+    # in which case there is exactly one page and it is never sliced.
+    mime_type = models.CharField(max_length=100, default="application/pdf")
     size_bytes = models.PositiveBigIntegerField(default=0)
     reader = models.CharField(max_length=20)
     analyser = models.CharField(max_length=20)

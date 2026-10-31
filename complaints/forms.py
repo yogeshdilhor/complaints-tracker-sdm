@@ -590,19 +590,41 @@ class IntakeUploadForm(forms.Form):
         return self.cleaned_data.get("ai_provider") or self._default_ai_provider
 
 
-class IntakeForm(DepartmentPickerMixin, forms.Form):
+# Registering a complaint, fresh or old, always goes through LegacyConfirmForm now.
+
+
+class LegacyUploadForm(forms.Form):
+    file = forms.FileField(label="The complaint, as one PDF, or a single JPG/PNG photo")
+    reader = forms.ChoiceField(
+        choices=legacy.READERS,
+        widget=forms.RadioSelect,
+        label="Read and summarise with",
+        initial="chatgpt",
+    )
+
+
+CURRENT_STATES = [
+    ("awaiting", "Waiting for a report from the department"),
+    ("review", "A report has come in; the SDM is reviewing it"),
+    ("closed", "Closed"),
+]
+
+
+class LegacyConfirmForm(DepartmentPickerMixin, forms.Form):
+    """The complaint details the AI found in the file; the user checks them. One form for a
+    single freshly-received letter and for an old file with a whole history: when nothing is
+    marked to a department, "where does it stand now" is simply not asked about."""
+
     name = forms.CharField(max_length=200, label="Complainant name")
     phone = forms.CharField(max_length=20, required=False)
     address = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
     village = forms.ModelChoiceField(queryset=Village.objects.none(), required=False)
-    source_platform = forms.ChoiceField(
-        choices=[("", "Select platform"), *Platform.choices], label="Platform"
-    )
-    external_ref = forms.CharField(max_length=100, required=False, label="External reference")
-    received_on = forms.DateField(widget=_DATE, initial=lambda: timezone.localdate())
-    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
-    subject = forms.CharField(max_length=300)
+    subject = forms.CharField(max_length=300, label="Heading")
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
+    source_platform = forms.ChoiceField(choices=Platform.choices, label="Platform")
+    external_ref = forms.CharField(max_length=100, required=False, label="External reference")
+    received_on = forms.DateField(widget=_DATE, label="Complaint received on")
+    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
     tags = forms.ModelMultipleChoiceField(queryset=Tag.objects.none(), required=False)
     new_tag = forms.CharField(max_length=50, required=False, label="New tag")
     concerned_department = forms.ModelChoiceField(
@@ -611,8 +633,15 @@ class IntakeForm(DepartmentPickerMixin, forms.Form):
     department = forms.ModelChoiceField(
         queryset=Department.objects.none(),
         required=False,
-        label="Marked to (department written on the paper)",
+        label="Marked to (blank = not marked yet)",
     )
+    current_state = forms.ChoiceField(
+        choices=CURRENT_STATES,
+        label="Where does it stand now?",
+        initial="awaiting",
+        help_text="Only matters once a department is marked, above.",
+    )
+    closed_reason = forms.CharField(required=False, label="Reason it was closed")
     related_to = forms.ModelChoiceField(queryset=Complaint.objects.none(), required=False)
     confirm_duplicates = forms.BooleanField(required=False)
 
@@ -623,10 +652,10 @@ class IntakeForm(DepartmentPickerMixin, forms.Form):
         self.fields["village"].widget = VillageWidget(villages)
         self.fields["category"].queryset = Category.objects.filter(office=office)
         self.fields["tags"].queryset = Tag.objects.filter(office=office)
-        self._wire_department_fields(office, required=False)
         self.fields["related_to"].queryset = Complaint.objects.filter(office=office)
         self.fields["related_to"].widget = forms.HiddenInput()
         self.fields["confirm_duplicates"].widget = forms.HiddenInput()
+        self._wire_department_fields(office, required=False)
 
     def clean_phone(self) -> str:
         return normalise_phone(self.cleaned_data["phone"])
@@ -640,59 +669,10 @@ class IntakeForm(DepartmentPickerMixin, forms.Form):
     def clean(self):
         cleaned = super().clean()
         self._clean_department_own()
-        return cleaned
-
-
-class LegacyUploadForm(forms.Form):
-    file = forms.FileField(label="The whole file as one PDF")
-    reader = forms.ChoiceField(
-        choices=legacy.READERS, widget=forms.RadioSelect, label="Read the pages with"
-    )
-
-
-CURRENT_STATES = [
-    ("awaiting", "Waiting for a report from the department"),
-    ("review", "A report has come in; the SDM is reviewing it"),
-    ("closed", "Closed"),
-]
-
-
-class LegacyConfirmForm(DepartmentPickerMixin, forms.Form):
-    """The complaint details the AI found in an old file; the user checks them."""
-
-    name = forms.CharField(max_length=200, label="Complainant name")
-    phone = forms.CharField(max_length=20, required=False)
-    address = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
-    village = forms.ModelChoiceField(queryset=Village.objects.none(), required=False)
-    subject = forms.CharField(max_length=300, label="Heading")
-    description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
-    source_platform = forms.ChoiceField(choices=Platform.choices, label="Platform")
-    external_ref = forms.CharField(max_length=100, required=False, label="External reference")
-    received_on = forms.DateField(widget=_DATE, label="Complaint received on")
-    concerned_department = forms.ModelChoiceField(
-        queryset=ConcernedDepartment.objects.none(), required=False, label="Concerned department"
-    )
-    department = forms.ModelChoiceField(
-        queryset=Department.objects.none(), label="Currently with (or last marked to)"
-    )
-    current_state = forms.ChoiceField(choices=CURRENT_STATES, label="Where does it stand now?")
-    closed_reason = forms.CharField(required=False, label="Reason it was closed")
-
-    def __init__(self, *args, office: Office, **kwargs):
-        super().__init__(*args, **kwargs)
-        villages = Village.objects.filter(office=office, is_active=True)
-        self.fields["village"].queryset = villages
-        self.fields["village"].widget = VillageWidget(villages)
-        self._wire_department_fields(office, required=True)
-
-    def clean_phone(self) -> str:
-        return normalise_phone(self.cleaned_data["phone"])
-
-    def clean(self):
-        cleaned = super().clean()
-        self._clean_department_own()
+        marked = bool(cleaned.get("department") or self._own_department)
         if (
-            cleaned.get("current_state") == "closed"
+            marked
+            and cleaned.get("current_state") == "closed"
             and not cleaned.get("closed_reason", "").strip()
         ):
             self.add_error("closed_reason", "Say why it was closed.")

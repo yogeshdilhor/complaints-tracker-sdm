@@ -26,7 +26,6 @@ from complaints.forms import (
     EditDetailsForm,
     ExportForm,
     FileComplaintForm,
-    IntakeForm,
     IntakeUploadForm,
     LegacyConfirmForm,
     LegacyUploadForm,
@@ -36,7 +35,6 @@ from complaints.forms import (
     stage_titles,
 )
 from complaints.models import (
-    Complainant,
     Complaint,
     Document,
     LegacyImport,
@@ -44,7 +42,6 @@ from complaints.models import (
     PortalSubmission,
     Referral,
     State,
-    Tag,
 )
 from complaints.services import intake, legacy, llm, logins
 from complaints.services import notifications as notification_service
@@ -52,7 +49,6 @@ from complaints.services import translate as translate_svc
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
     extract_complaint_fields,
-    extract_complaint_fields_from_images,
     read_document_as_stage,
     read_document_images_as_stage,
     summarise_report,
@@ -80,7 +76,6 @@ from complaints.workflow import (
     attach_document,
     edit_details,
     file_complaint,
-    register_complaint,
     unfile_complaint,
 )
 from core.models import Department, Village
@@ -1054,155 +1049,25 @@ def complaint_translate(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 # ------------------------------------------------------------------- intake
-
-INTAKE_SESSION_KEY = "intake"
+#
+# A fresh, single-document complaint and an old multi-document case file are now read by the
+# same engine (complaints.services.legacy): there is nothing a one-page complaint needs that a
+# 150-page one doesn't already do, just with one document found instead of several. These two
+# URLs exist only because they were bookmarked or linked before the two flows merged.
 
 
 @login_required
-@require_http_methods(["GET", "POST"])
 def intake_upload(request: HttpRequest) -> HttpResponse:
     if not perms.can(request.user, perms.REGISTER):
         return HttpResponseForbidden("You are not allowed to register complaints.")
-    form = IntakeUploadForm(request.POST or None, request.FILES or None)
-    if request.method == "POST" and form.is_valid():
-        attachment = form.cleaned_data["file"]
-        extraction = extract(attachment.content, attachment.mime_type)
-        sha = intake.stage_upload(attachment)
-        chosen_ai = form.cleaned_data["ai_provider"]
-        ai: dict[str, str] = {}
-        village_names: list[str] = []
-        if chosen_ai == "openai_vision" and llm.is_configured():
-            village_names = list(
-                Village.objects.filter(office=request.user.office, is_active=True).values_list(
-                    "name", flat=True
-                )
-            )
-            ai = extract_complaint_fields_from_images(
-                page_images(attachment.content, attachment.mime_type), village_names
-            )
-        elif extraction.text and chosen_ai != "none" and llm.is_configured():
-            village_names = list(
-                Village.objects.filter(office=request.user.office, is_active=True).values_list(
-                    "name", flat=True
-                )
-            )
-            guess = intake.guess_fields(extraction.text, request.user.office, extraction.latin_text)
-            ai = extract_complaint_fields(
-                extraction.text,
-                village_names,
-                known=[guess.name, guess.phone, guess.address],
-            )
-        request.session[INTAKE_SESSION_KEY] = {
-            "ai": ai,
-            "ai_for": sha,
-            "ai_asked": chosen_ai,
-            "sha": sha,
-            "filename": attachment.filename,
-            "extracted_text": extraction.text,
-            "latin_text": extraction.latin_text,
-            "text_status": extraction.status,
-            "page_count": extraction.pages,
-            "typed": extraction.typed,
-        }
-        return redirect("complaints:intake_review")
-    return render(request, "complaints/intake_upload.html", {"form": form})
+    return redirect("complaints:legacy_upload")
 
 
 @login_required
-@require_http_methods(["GET", "POST"])
 def intake_review(request: HttpRequest) -> HttpResponse:
     if not perms.can(request.user, perms.REGISTER):
         return HttpResponseForbidden("You are not allowed to register complaints.")
-    meta = request.session.get(INTAKE_SESSION_KEY)
-    attachment = intake.load_staged(meta["sha"], meta) if meta else None
-    if attachment is None:
-        return redirect("complaints:intake_upload")
-
-    office = request.user.office
-    guess = intake.guess_fields(attachment.extracted_text, office, meta.get("latin_text", ""))
-    if request.method == "POST":
-        form = IntakeForm(request.POST, office=office)
-    else:
-        # The model was asked once, when the file was uploaded (see intake_upload).
-        intake.merge_ai_fields(guess, meta.get("ai", {}), office)
-        form = IntakeForm(initial=guess.as_initial(), office=office)
-
-    duplicates: list = []
-    if request.method == "POST" and form.is_valid():
-        cd = form.cleaned_data
-        if not cd["confirm_duplicates"]:
-            duplicates = intake.find_possible_duplicates(
-                office,
-                external_ref=cd["external_ref"],
-                phone=cd["phone"],
-                subject=cd["subject"],
-                village=cd["village"],
-            )
-        if not duplicates:
-            form.resolve_department()  # a typed concerned department / marked-to becomes real
-            complaint = _save_intake(request, cd, attachment, office)
-            request.session.pop(INTAKE_SESSION_KEY, None)
-            return redirect("complaints:detail", pk=complaint.pk)
-        # Same page again, now with the warning; the clerk chooses how to continue.
-        form.data = form.data.copy()
-        form.data["confirm_duplicates"] = "on"
-
-    return render(
-        request,
-        "complaints/intake_review.html",
-        {
-            "form": form,
-            "duplicates": duplicates,
-            "filename": attachment.filename,
-            "text_status": attachment.text_status,
-            "handwritten": attachment.typed is False and not meta.get("ai"),
-            "village_hint": guess.village_text if guess.village_id is None else "",
-            "document_preview": attachment.extracted_text[:2000],
-        },
-    )
-
-
-def _save_intake(request: HttpRequest, cd: dict[str, Any], attachment, office) -> Complaint:
-    with transaction.atomic():
-        complainant = None
-        if cd["phone"]:
-            complainant = Complainant.objects.filter(office=office, phone=cd["phone"]).first()
-        if complainant is None:
-            complainant = Complainant.objects.create(
-                office=office,
-                name=cd["name"],
-                phone=cd["phone"],
-                address=cd["address"],
-                village=cd["village"],
-            )
-        tags = list(cd["tags"])
-        if cd["new_tag"]:
-            tag = Tag.objects.filter(office=office, name__iexact=cd["new_tag"]).first()
-            tags.append(tag or Tag.objects.create(office=office, name=cd["new_tag"]))
-        complaint = register_complaint(
-            office=office,
-            complainant=complainant,
-            actor=request.user,
-            source_platform=cd["source_platform"],
-            received_on=cd["received_on"],
-            subject=cd["subject"],
-            description=cd["description"],
-            external_ref=cd["external_ref"],
-            village=cd["village"],
-            category=cd["category"],
-            tags=tags,
-            related_to=cd["related_to"],
-            attachment=attachment,
-        )
-        if cd["description"]:  # the 50-75 word summary also belongs to the uploaded letter
-            Document.objects.filter(complaint=complaint, kind=Document.Kind.COMPLAINT).update(
-                summary=cd["description"][:2000]
-            )
-        if cd["department"]:  # marking it starts the department's reply clock
-            apply_transition(
-                complaint, Action.ISSUE_NOTICE, request.user, department=cd["department"]
-            )
-        return complaint
+    return redirect("complaints:legacy_upload")
 
 
 # ------------------------------------------------------------------ legacy complaints
@@ -1284,6 +1149,7 @@ def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
         return render(request, template, {"job": job})
 
     docs = job.proposal.get("documents", [])
+    duplicates: list = []
     if request.method == "POST":
         form = LegacyConfirmForm(request.POST, office=request.user.office)
         kept = []
@@ -1292,14 +1158,28 @@ def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
                 headline = request.POST.get(f"headline_{number}", "").strip() or item["headline"]
                 kept.append(item | {"headline": headline[:150]})
         if form.is_valid() and kept:
-            kept.sort(key=lambda d: (d["date"] or "9999", d["first"]))
-            form.resolve_department()  # a typed concerned department / marked-to becomes real
-            try:
-                complaint = legacy.create_complaint(job, request.user, form.cleaned_data, kept)
-            except (legacy.LegacyError, DuplicateDocument) as exc:
-                form.add_error(None, str(exc))
+            cd = form.cleaned_data
+            if not cd["confirm_duplicates"]:
+                duplicates = intake.find_possible_duplicates(
+                    request.user.office,
+                    external_ref=cd["external_ref"],
+                    phone=cd["phone"],
+                    subject=cd["subject"],
+                    village=cd["village"],
+                )
+            if not duplicates:
+                kept.sort(key=lambda d: (d["date"] or "9999", d["first"]))
+                form.resolve_department()  # a typed concerned dept / marked-to becomes real
+                try:
+                    complaint = legacy.create_complaint(job, request.user, cd, kept)
+                except (legacy.LegacyError, DuplicateDocument) as exc:
+                    form.add_error(None, str(exc))
+                else:
+                    return redirect("complaints:detail", pk=complaint.pk)
             else:
-                return redirect("complaints:detail", pk=complaint.pk)
+                # Same page again, now with the warning; the clerk chooses how to continue.
+                form.data = form.data.copy()
+                form.data["confirm_duplicates"] = "on"
         elif not kept:
             form.add_error(None, "Keep at least one document.")
     else:
@@ -1307,7 +1187,14 @@ def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
     return render(
         request,
         "complaints/legacy_review.html",
-        {"job": job, "form": form, "docs": list(enumerate(docs))},
+        {
+            "job": job,
+            "form": form,
+            "docs": list(enumerate(docs)),
+            "duplicates": duplicates,
+            "village_hint": job.proposal.get("fields", {}).get("village_hint", ""),
+            "handwritten": job.proposal.get("handwritten", False),
+        },
     )
 
 

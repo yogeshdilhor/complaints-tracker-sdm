@@ -68,6 +68,7 @@ class Command(BaseCommand):
                     complaint,
                     actor,
                     content,
+                    source.mime_type,
                     pages,
                     s.first,
                     s.last,

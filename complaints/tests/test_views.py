@@ -516,11 +516,40 @@ def test_overdue_page_lists_portal_rejections_waiting_for_action(
 
 
 # ------------------------------------------------------------------ intake
+#
+# "Intake" now means complaints.views.legacy_upload / legacy_status: a fresh, single-document
+# complaint is read by the same engine as an old multi-document case file, just with one
+# document found instead of several. See complaints/services/legacy.py.
 
 
-def upload_step(client, body=b"complaint-one", **extra):
-    data = {"file": pdf("complaint.pdf", body)} | extra
-    return client.post(reverse("complaints:intake_upload"), data)
+@pytest.fixture
+def fake_simple_ai(monkeypatch, settings):
+    """A minimal one-page, one-document pipeline: enough to reach the confirm screen without a
+    real network call. What matters in these tests is what the confirm screen itself is posted,
+    not what the model found, so the content here is deliberately bland."""
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
+    settings.OPENAI_API_KEY = "k"
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(legacy, "page_images", lambda part, *a, **k: [part])
+    monkeypatch.setattr(legacy.llm, "read_page", lambda image: "placeholder text")
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
+    segment = fs.Segment(1, 1, "complaint", None, "", "", "Complaint", "")
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: [segment])
+    monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "")
+    monkeypatch.setattr(legacy, "extract_complaint_fields_unmasked", lambda *a, **k: {})
+
+
+def upload_step(client, body=b"complaint-one", reader="chatgpt", **extra):
+    data = {"file": pdf("complaint.pdf", body), "reader": reader} | extra
+    return client.post(reverse("complaints:legacy_upload"), data)
+
+
+def review_url():
+    from complaints.models import LegacyImport
+
+    return reverse("complaints:legacy_status", args=[LegacyImport.objects.latest("id").pk])
 
 
 def intake_data(village, **over):
@@ -535,14 +564,18 @@ def intake_data(village, **over):
         "category": "",
         "subject": "Pension not received",
         "description": "",
+        "current_state": "awaiting",
+        "keep_0": "on",
     }
     return data | over
 
 
-def test_intake_with_a_department_marks_it_and_starts_the_clock(login, clerk, village, tehsildar):
+def test_intake_with_a_department_marks_it_and_starts_the_clock(
+    login, clerk, village, tehsildar, fake_simple_ai
+):
     client = login(clerk)
     upload_step(client)
-    client.post(reverse("complaints:intake_review"), intake_data(village, department=tehsildar.pk))
+    client.post(review_url(), intake_data(village, department=tehsildar.pk))
     complaint = Complaint.objects.get()
     assert complaint.current_state == State.AWAITING_REPORT
     assert complaint.current_department == tehsildar
@@ -550,12 +583,12 @@ def test_intake_with_a_department_marks_it_and_starts_the_clock(login, clerk, vi
 
 
 def test_intake_typed_department_is_created_and_linked_to_concerned_department(
-    login, clerk, village
+    login, clerk, village, fake_simple_ai
 ):
     client = login(clerk)
     upload_step(client)
     client.post(
-        reverse("complaints:intake_review"),
+        review_url(),
         intake_data(
             village,
             concerned_department_own="MICADA (Micro Irrigation)",
@@ -570,7 +603,7 @@ def test_intake_typed_department_is_created_and_linked_to_concerned_department(
     second = login(clerk)
     upload_step(second)
     second.post(
-        reverse("complaints:intake_review"),
+        review_url(),
         intake_data(
             village,
             external_ref="CMW-6",
@@ -584,22 +617,23 @@ def test_intake_typed_department_is_created_and_linked_to_concerned_department(
     assert Department.objects.count() == 1
 
 
-def test_intake_new_tag_is_created_once(login, clerk, village):
+def test_intake_new_tag_is_created_once(login, clerk, village, fake_simple_ai):
     client = login(clerk)
     upload_step(client)
-    client.post(
-        reverse("complaints:intake_review"), intake_data(village, new_tag="road encroachment")
-    )
-    assert Complaint.objects.get().tags.get().name == "road encroachment"
+    client.post(review_url(), intake_data(village, new_tag="road encroachment"))
+    names = set(Complaint.objects.get().tags.values_list("name", flat=True))
+    assert "road encroachment" in names
 
 
-def test_intake_end_to_end_creates_complaint_document_and_event(login, clerk, village):
+def test_intake_end_to_end_creates_complaint_document_and_event(
+    login, clerk, village, fake_simple_ai
+):
     client = login(clerk)
     assert upload_step(client).status_code == 302
-    review = client.get(reverse("complaints:intake_review"))
+    review = client.get(review_url())
     assert review.status_code == 200 and "complaint.pdf" in review.content.decode()
 
-    response = client.post(reverse("complaints:intake_review"), intake_data(village))
+    response = client.post(review_url(), intake_data(village))
     complaint = Complaint.objects.get()
     assert response.status_code == 302 and response["Location"] == reverse(
         "complaints:detail", args=[complaint.pk]
@@ -609,28 +643,27 @@ def test_intake_end_to_end_creates_complaint_document_and_event(login, clerk, vi
     assert complaint.complainant.phone == "9000012345"
     assert complaint.documents.get().kind == Document.Kind.COMPLAINT
     assert Event.objects.get(complaint=complaint).type == EventType.COMPLAINT_REGISTERED
-    assert client.get(reverse("complaints:intake_review")).status_code == 302
 
 
-def test_nothing_is_saved_until_the_clerk_clicks_save(login, clerk):
-    upload_step(login(clerk))
-    login(clerk).get(reverse("complaints:intake_review"))
+def test_nothing_is_saved_until_the_clerk_clicks_save(login, clerk, fake_simple_ai):
+    client = login(clerk)
+    upload_step(client)
+    client.get(review_url())
     assert Complaint.objects.count() == 0
 
 
-def test_intake_review_without_an_upload_goes_back_to_upload(login, clerk):
-    response = login(clerk).get(reverse("complaints:intake_review"))
-    assert response.status_code == 302
-    assert response["Location"] == reverse("complaints:intake_upload")
+def test_a_nonexistent_or_someone_elses_job_is_not_found(login, clerk):
+    response = login(clerk).get(reverse("complaints:legacy_status", args=[999999]))
+    assert response.status_code == 404
 
 
-def test_intake_reuses_the_complainant_by_phone(login, clerk, village):
+def test_intake_reuses_the_complainant_by_phone(login, clerk, village, fake_simple_ai):
     client = login(clerk)
     upload_step(client, b"one")
-    client.post(reverse("complaints:intake_review"), intake_data(village, external_ref="A"))
+    client.post(review_url(), intake_data(village, external_ref="A"))
     upload_step(client, b"two")
     client.post(
-        reverse("complaints:intake_review"),
+        review_url(),
         intake_data(village, external_ref="B", subject="Something else completely")
         | {"confirm_duplicates": "on"},
     )
@@ -640,43 +673,45 @@ def test_intake_reuses_the_complainant_by_phone(login, clerk, village):
     }
 
 
-def test_intake_warns_about_duplicates_then_saves_when_confirmed(login, clerk, village):
+def test_intake_warns_about_duplicates_then_saves_when_confirmed(
+    login, clerk, village, fake_simple_ai
+):
     client = login(clerk)
     upload_step(client, b"one")
-    client.post(reverse("complaints:intake_review"), intake_data(village))
+    client.post(review_url(), intake_data(village))
     first = Complaint.objects.get()
 
     upload_step(client, b"two")
-    warned = client.post(reverse("complaints:intake_review"), intake_data(village))
+    url = review_url()
+    warned = client.post(url, intake_data(village))
     assert warned.status_code == 200
     assert first.ref_no in warned.content.decode()
     assert Complaint.objects.count() == 1
 
     saved = client.post(
-        reverse("complaints:intake_review"),
-        intake_data(village) | {"confirm_duplicates": "on", "related_to": first.pk},
+        url, intake_data(village) | {"confirm_duplicates": "on", "related_to": first.pk}
     )
     assert saved.status_code == 302
     second = Complaint.objects.exclude(pk=first.pk).get()
     assert second.related_to == first
 
 
-def test_intake_rejects_a_future_received_date(login, clerk, village):
+def test_intake_rejects_a_future_received_date(login, clerk, village, fake_simple_ai):
     client = login(clerk)
     upload_step(client)
     future = (timezone.localdate() + timedelta(days=3)).isoformat()
-    response = client.post(
-        reverse("complaints:intake_review"), intake_data(village, received_on=future)
-    )
+    response = client.post(review_url(), intake_data(village, received_on=future))
     assert response.status_code == 200
     assert Complaint.objects.count() == 0
 
 
 def test_intake_upload_rejects_non_documents(login, clerk):
     bad = SimpleUploadedFile("x.pdf", b"MZ not a pdf")
-    response = login(clerk).post(reverse("complaints:intake_upload"), {"file": bad})
+    response = login(clerk).post(
+        reverse("complaints:legacy_upload"), {"file": bad, "reader": "chatgpt"}
+    )
     assert response.status_code == 200
-    assert "Only PDF, JPG and PNG" in response.content.decode()
+    assert "Please upload a PDF, JPG or PNG file." in response.content.decode()
 
 
 @pytest.mark.parametrize("role", ["auditor", "officer"])
@@ -684,30 +719,34 @@ def test_only_registering_roles_can_use_intake(request, login, role):
     user = request.getfixturevalue(role)
     assert login(user).get(reverse("complaints:intake_upload")).status_code == 403
     assert login(user).get(reverse("complaints:intake_review")).status_code == 403
+    assert login(user).get(reverse("complaints:legacy_upload")).status_code == 403
 
 
 def test_admin_role_can_register_complaints(login, admin_role):
-    assert login(admin_role).get(reverse("complaints:intake_upload")).status_code == 200
+    assert login(admin_role).get(reverse("complaints:intake_upload")).status_code == 302
+    assert login(admin_role).get(reverse("complaints:legacy_upload")).status_code == 200
 
 
-def test_platform_must_be_chosen_not_defaulted(login, clerk, village):
+def test_platform_must_be_chosen_not_defaulted(login, clerk, village, fake_simple_ai):
     client = login(clerk)
     upload_step(client)
-    response = client.post(
-        reverse("complaints:intake_review"), intake_data(village, source_platform="")
-    )
+    response = client.post(review_url(), intake_data(village, source_platform=""))
     assert response.status_code == 200
     assert Complaint.objects.count() == 0
 
 
-def test_phone_is_stored_as_plain_digits(login, clerk, village):
+def test_phone_is_stored_as_plain_digits(login, clerk, village, fake_simple_ai):
     client = login(clerk)
     upload_step(client)
-    client.post(reverse("complaints:intake_review"), intake_data(village, phone="+91 90000-12345"))
+    client.post(review_url(), intake_data(village, phone="+91 90000-12345"))
     assert Complaint.objects.get().complainant.phone == "9000012345"
 
 
 def test_review_form_is_prefilled_from_the_extracted_text(login, clerk, office, monkeypatch):
+    """With "none" chosen (no AI at all), the free local pattern-matching still pre-fills the
+    form from whatever the local reader found - no network call needed."""
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
     from core.models import Village
 
     Village.objects.create(office=office, name="Tohana", name_hi="तोहाना")
@@ -715,27 +754,34 @@ def test_review_form_is_prefilled_from_the_extracted_text(login, clerk, office, 
         "विषय :- सड़क की मरम्मत बाबत।\nप्रार्थीगण\n"
         "रामलाल पुत्र मोहन सिंह निवासी गांव तोहाना\nमो. 98765 43210"
     )
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
     monkeypatch.setattr(
-        "complaints.views.extract",
-        lambda content, mime: Extraction(letter, "done", 1, latin_text="Mob 91234 56789"),
+        legacy, "extract", lambda content, mime: Extraction(letter, "done", 1, typed=True)
     )
     client = login(clerk)
-    upload_step(client)
-    html = client.get(reverse("complaints:intake_review")).content.decode()
+    upload_step(client, reader="none")
+    html = client.get(review_url()).content.decode()
     assert 'value="रामलाल"' in html
-    assert 'value="9123456789"' in html  # the English OCR pass wins for digits
     assert "सड़क की मरम्मत बाबत।" in html
     assert "selected" in html.split('name="village"')[1].split("</select>")[0]
 
 
-def test_review_page_names_a_village_that_is_missing_from_the_list(login, clerk, monkeypatch):
+def test_review_page_names_a_village_that_is_missing_from_the_list(
+    login, clerk, monkeypatch, village
+):
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
     letter = "विषय :- सड़क।\nप्रार्थीगण\nरामलाल पुत्र मोहन सिंह निवासी गांव नौरंग"
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
     monkeypatch.setattr(
-        "complaints.views.extract", lambda content, mime: Extraction(letter, "done", 1)
+        legacy, "extract", lambda content, mime: Extraction(letter, "done", 1, typed=True)
     )
     client = login(clerk)
-    upload_step(client)
-    html = client.get(reverse("complaints:intake_review")).content.decode()
+    upload_step(client, reader="none")
+    html = client.get(review_url()).content.decode()
     assert "<strong>नौरंग</strong>" in html
 
 

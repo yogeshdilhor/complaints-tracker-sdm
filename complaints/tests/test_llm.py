@@ -5,11 +5,12 @@ import json
 import pytest
 from django.urls import reverse
 
+from complaints.models import LegacyImport
 from complaints.services import description_summary as ai
 from complaints.services import llm
 from complaints.services.documents import Extraction, extract
 from complaints.tests.test_intake import tools  # noqa: F401 - fake pdftotext/tesseract fixture
-from complaints.tests.test_views import login, upload_step  # noqa: F401 - fixtures/helpers
+from complaints.tests.test_views import login, review_url, upload_step  # noqa: F401 - fixtures
 
 
 class FakeResponse:
@@ -99,54 +100,65 @@ def test_one_handwritten_page_in_a_mixed_pdf_makes_it_handwritten(tools):  # noq
     assert extract(b"%PDF-1.4", "application/pdf").typed is False
 
 
-def test_handwritten_letters_are_still_sent_but_flagged(login, clerk, monkeypatch, settings):  # noqa: F811
-    # The masked (text) choice specifically: vision mode (the default now) has no need to skip
-    # or flag handwriting, since reading images is its whole point.
+def test_the_local_reader_still_extracts_fields_once(login, clerk, monkeypatch, settings):  # noqa: F811
+    """ "Local reader" means free local OCR, not no AI: the pages it finds still go to the model
+    once, unmasked, to work out the documents and the complainant's own fields."""
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
     settings.OPENAI_API_KEY = "k"
     calls = []
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
     monkeypatch.setattr(
-        "complaints.views.extract",
-        lambda content, mime: Extraction("scrawl", "done", 1, typed=False),
+        legacy, "extract", lambda content, mime: Extraction("A typed letter", "done", 1, typed=True)
     )
+    segment = fs.Segment(1, 1, "complaint", None, "", "", "Complaint", "")
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: [segment])
+    monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "")
     monkeypatch.setattr(
-        "complaints.views.extract_complaint_fields",
-        lambda *a, **k: calls.append(a) or {},
+        legacy, "extract_complaint_fields_unmasked", lambda *a, **k: calls.append(1) or {}
     )
-    client = login(clerk)
-    upload_step(client, ai_provider="openai")
-    html = client.get(reverse("complaints:intake_review")).content.decode()
-    assert len(calls) == 1 and "handwritten" in html
-
-
-def test_typed_letters_are_sent_once_to_the_model(login, clerk, monkeypatch, settings):  # noqa: F811
-    settings.OPENAI_API_KEY = "k"
-    calls = []
-    monkeypatch.setattr(
-        "complaints.views.extract",
-        lambda content, mime: Extraction("A typed letter", "done", 1, typed=True),
-    )
-    monkeypatch.setattr(
-        "complaints.views.extract_complaint_fields",
-        lambda *a, **k: calls.append(1) or {},
-    )
-    client = login(clerk)
-    upload_step(client, ai_provider="openai")
-    client.get(reverse("complaints:intake_review"))
+    upload_step(login(clerk), reader="local")
     assert calls == [1]
 
 
-def test_choosing_no_ai_sends_nothing(login, clerk, monkeypatch, settings):  # noqa: F811
-    settings.OPENAI_API_KEY = "k"
+def test_choosing_no_ai_calls_the_model_for_nothing(login, clerk, monkeypatch, settings):  # noqa: F811
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
     calls = []
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
     monkeypatch.setattr(
-        "complaints.views.extract",
-        lambda content, mime: Extraction("A typed letter", "done", 1, typed=True),
+        legacy, "extract", lambda content, mime: Extraction("A typed letter", "done", 1, typed=True)
     )
-    monkeypatch.setattr(
-        "complaints.views.extract_complaint_fields", lambda *a, **k: calls.append(a) or {}
-    )
-    upload_step(login(clerk), ai_provider="none")
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: calls.append(1) or "x")
+    monkeypatch.setattr(llm, "complete_with_images", lambda *a, **k: calls.append(1) or "x")
+    upload_step(login(clerk), reader="none")
     assert not calls
+
+
+def test_the_local_reader_flags_a_handwritten_letter(login, clerk, monkeypatch, settings):  # noqa: F811
+    """The chatgpt reader never needs this warning (reading images is exactly what it does);
+    only the local reader, whose own OCR pass can tell typed from handwritten."""
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
+    settings.OPENAI_API_KEY = "k"
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
+    monkeypatch.setattr(
+        legacy, "extract", lambda content, mime: Extraction("scrawl", "done", 1, typed=False)
+    )
+    segment = fs.Segment(1, 1, "complaint", None, "", "", "Complaint", "")
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: [segment])
+    monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "")
+    monkeypatch.setattr(legacy, "extract_complaint_fields_unmasked", lambda *a, **k: {})
+    client = login(clerk)
+    upload_step(client, reader="local")
+    html = client.get(review_url()).content.decode()
+    assert "looks <strong>handwritten</strong>" in html
 
 
 def test_a_handwritten_document_gets_no_summary(login, clerk, complaint, make_document, settings):  # noqa: F811
@@ -166,65 +178,76 @@ def test_new_complaints_default_to_vision_and_prefill_phone_and_named_complainan
     monkeypatch,
     settings,  # noqa: F811
 ):
-    """The default for registering a new complaint (not the "add a document" flow elsewhere) is
-    vision reading, because that is the only path that can read the phone number and name
+    """Registering a new complaint (not the "add a document" flow elsewhere) defaults to the
+    chatgpt reader, because that is the only path that can read the phone number and name
     specific co-complainants, not just say "Multiple complainants"."""
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
     settings.OPENAI_API_KEY = "k"
-    seen = {}
-
-    def fake_images(prompt, images, **kw):
-        seen["images"], seen["prompt"] = images, prompt
-        return json.dumps(
-            {
-                "summary": "Farmers ask for the canal khal to be cleared.",
-                "subject": "Canal obstruction",
-                "name": "Multiple complainants (Kalu Ram, Surender)",
-                "phone": "9876543210",
-                "address": "Village Baluana",
-            }
-        )
-
-    monkeypatch.setattr(llm, "complete_with_images", fake_images)
-    monkeypatch.setattr("complaints.views.page_images", lambda content, mime: [b"\xff\xd8\xffjpg"])
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(legacy, "page_images", lambda part, *a, **k: [part])
+    monkeypatch.setattr(legacy.llm, "read_page", lambda image: "placeholder text")
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
+    segment = fs.Segment(1, 1, "complaint", None, "", "", "Canal obstruction", "")
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: [segment])
+    monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "")
     monkeypatch.setattr(
-        "complaints.views.extract", lambda content, mime: Extraction("", "done", 1, typed=False)
+        legacy,
+        "extract_complaint_fields_unmasked",
+        lambda *a, **k: {
+            "summary": "Farmers ask for the canal khal to be cleared.",
+            "subject": "Canal obstruction",
+            "name": "Multiple complainants (Kalu Ram, Surender)",
+            "phone": "9876543210",
+            "address": "Village Baluana",
+        },
     )
     client = login(clerk)
-    upload_step(client)  # no ai_provider given: the default should still be vision
-    html = client.get(reverse("complaints:intake_review")).content.decode()
-    assert seen["images"] == [b"\xff\xd8\xffjpg"]
+    upload_step(client)  # no reader given: the default should still be chatgpt
+    job = LegacyImport.objects.get()
+    assert job.reader == "chatgpt"
+    html = client.get(review_url()).content.decode()
     assert "Multiple complainants (Kalu Ram, Surender)" in html
     assert "9876543210" in html
 
 
-def test_vision_upload_sends_page_images_to_openai_and_prefills(
+def test_vision_upload_reads_page_images_then_asks_the_model_for_the_fields(
     login,  # noqa: F811
     clerk,
     monkeypatch,
     settings,  # noqa: F811
 ):
+    from complaints.services import file_splitter as fs
+    from complaints.services import legacy
+
     settings.OPENAI_API_KEY = "k"
     seen = {}
 
     def fake_images(prompt, images, **kw):
         seen["images"], seen["prompt"] = images, prompt
-        return json.dumps(
-            {
-                "summary": "Tower wire burns.",
-                "subject": "Tower wire",
-                "name": "Sarpanch, Gram Panchayat Naurang",
-            }
-        )
+        return "शिकायत का पाठ"
 
     monkeypatch.setattr(llm, "complete_with_images", fake_images)
-    monkeypatch.setattr("complaints.views.page_images", lambda content, mime: [b"\xff\xd8\xffjpg"])
+    monkeypatch.setattr(legacy, "count_pages", lambda content: 1)
+    monkeypatch.setattr(legacy, "page_images", lambda part, *a, **k: [part])
+    monkeypatch.setattr(fs, "split_pdf", lambda content, a, b: b"%PDF-1.4 page")
+    segment = fs.Segment(1, 1, "complaint", None, "", "", "Tower wire", "")
+    monkeypatch.setattr(fs, "segment_pages", lambda pages, **k: [segment])
+    monkeypatch.setattr(legacy.llm, "complete", lambda *a, **k: "")
     monkeypatch.setattr(
-        "complaints.views.extract", lambda content, mime: Extraction("", "done", 1, typed=False)
+        legacy,
+        "extract_complaint_fields_unmasked",
+        lambda *a, **k: {
+            "summary": "Tower wire burns.",
+            "subject": "Tower wire",
+            "name": "Sarpanch, Gram Panchayat Naurang",
+        },
     )
     client = login(clerk)
-    upload_step(client, ai_provider="openai_vision")
-    html = client.get(reverse("complaints:intake_review")).content.decode()
-    assert seen["images"] == [b"\xff\xd8\xffjpg"] and "Sarpanch" in seen["prompt"]
+    upload_step(client, reader="chatgpt")
+    html = client.get(review_url()).content.decode()
+    assert seen["images"] == [b"%PDF-1.4 page"] and "Transcribe" in seen["prompt"]
     assert "Sarpanch, Gram Panchayat Naurang" in html and "Tower wire burns." in html
     assert "looks <strong>handwritten</strong>" not in html
 

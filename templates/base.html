@@ -30,7 +30,7 @@
       {% if admin_index_url %}<a href="{{ admin_index_url }}">Admin</a>{% endif %}
     </nav>
     {% include "complaints/_bell.html" %}
-    {% if can_register %}<a class="cta cta-quiet" href="{% url 'complaints:legacy_upload' %}">Legacy complaint</a><a class="cta" href="{% url 'complaints:intake_upload' %}">+ New complaint</a>{% endif %}
+    {% if can_register %}<a class="cta" href="{% url 'complaints:legacy_upload' %}">+ Register complaint</a>{% endif %}
     <div class="user-menu">
       <details>
         <summary aria-label="Account menu" title="{{ user.get_full_name|default:user.username }}">

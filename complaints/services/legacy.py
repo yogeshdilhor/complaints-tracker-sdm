@@ -29,12 +29,18 @@ from complaints.models import (
     LegacyImport,
     Tag,
 )
-from complaints.services import file_splitter, llm
+from complaints.services import file_splitter, intake, llm
 from complaints.services.description_summary import (
     REPORT_PROMPT,
     extract_complaint_fields_unmasked,
 )
-from complaints.services.documents import Attachment, extract, page_images, store_document
+from complaints.services.documents import (
+    Attachment,
+    extract,
+    page_images,
+    sniff_mime,
+    store_document,
+)
 from complaints.workflow import Action, add_stage, apply_transition, register_complaint
 
 logger = logging.getLogger(__name__)
@@ -65,7 +71,12 @@ KIND_LABEL = {
 }
 READERS = [
     ("chatgpt", "ChatGPT gpt-6-luna reads the page images (best for Hindi and handwriting)"),
-    ("local", "Local reader (free, but poor on handwriting)"),
+    (
+        "local",
+        "Local reader (free, but poor on handwriting; still uses AI to work out the "
+        "documents and fields)",
+    ),
+    ("none", "Do not use AI at all (fill in everything yourself)"),
 ]
 
 
@@ -88,24 +99,35 @@ def count_pages(content: bytes) -> int:
 
 
 def create_import(office, user, content: bytes, filename: str, reader: str):
-    """Validate and store the file, then queue the reading. Raises LegacyError."""
-    if not content.startswith(b"%PDF"):
-        raise LegacyError("Please upload a PDF. Scan all pages into one file.")
+    """Validate and store the file, then queue the reading. Raises LegacyError.
+
+    A PDF may hold up to LEGACY_MAX_PAGES pages, read and split into separate documents; a
+    single JPG/PNG photo is always exactly one page, read as the complaint itself.
+    """
     if len(content) > settings.LEGACY_MAX_MB * 1024 * 1024:
         raise LegacyError(f"The file is over {settings.LEGACY_MAX_MB} MB.")
-    pages = count_pages(content)
-    if not pages:
-        raise LegacyError("This PDF could not be opened.")
-    if pages > settings.LEGACY_MAX_PAGES:
-        raise LegacyError(f"The file has {pages} pages; the limit is {settings.LEGACY_MAX_PAGES}.")
+    mime_type = sniff_mime(content)
+    if mime_type not in settings.ALLOWED_UPLOAD_TYPES:
+        raise LegacyError("Please upload a PDF, JPG or PNG file.")
+    if mime_type == "application/pdf":
+        pages = count_pages(content)
+        if not pages:
+            raise LegacyError("This PDF could not be opened.")
+        if pages > settings.LEGACY_MAX_PAGES:
+            raise LegacyError(
+                f"The file has {pages} pages; the limit is {settings.LEGACY_MAX_PAGES}."
+            )
+    else:
+        pages = 1
     if reader not in dict(READERS):
         raise LegacyError("Please choose how the pages are read.")
-    if not llm.is_configured():
+    if reader != "none" and not llm.is_configured():
         raise LegacyError("OPENAI_API_KEY is not set in the .env file.")
     import hashlib
 
     sha = hashlib.sha256(content).hexdigest()
-    path = f"legacy/{sha}.pdf"
+    ext = settings.ALLOWED_UPLOAD_TYPES[mime_type]
+    path = f"legacy/{sha}{ext}"
     if not default_storage.exists(path):
         default_storage.save(path, ContentFile(content))
     job = LegacyImport.objects.create(
@@ -114,6 +136,7 @@ def create_import(office, user, content: bytes, filename: str, reader: str):
         filename=filename[:255],
         sha256=sha,
         file=path,
+        mime_type=mime_type,
         size_bytes=len(content),
         reader=reader,
         analyser="openai",
@@ -147,47 +170,85 @@ def _set(job: LegacyImport, **fields: Any) -> None:
         setattr(job, name, value)
 
 
-def _read_one_page(content: bytes, number: int, reader: str) -> str:
-    part = file_splitter.split_pdf(content, number, number)
-    text: str | None = None
-    if part is not None and reader == "chatgpt":
-        images = page_images(part, "application/pdf", max_pages=1)
+def _slice(content: bytes, mime_type: str, first: int, last: int) -> bytes | None:
+    """Pages first..last as their own file. A PDF is cut with poppler; a single photo is
+    already exactly one page, so first and last are always 1 and it is returned unchanged."""
+    if mime_type == "application/pdf":
+        return file_splitter.split_pdf(content, first, last)
+    return content
+
+
+def _read_one_page(
+    content: bytes, mime_type: str, number: int, reader: str
+) -> tuple[str, bool | None]:
+    """The page's text, and whether it looks handwritten (None for the chatgpt reader: reading
+    images is exactly what it is good at, so there is nothing to warn about)."""
+    part = _slice(content, mime_type, number, number)
+    if part is None:
+        return "", None
+    if reader == "chatgpt":
+        images = page_images(part, mime_type, max_pages=1)
         text = llm.read_page(images[0]) if images else None
-    elif part is not None:
-        text = extract(part, "application/pdf").text.strip()
-    return (text or "").strip()
+        return (text or "").strip(), None
+    extraction = extract(part, mime_type)
+    return extraction.text.strip(), extraction.typed is False
 
 
-def _read_pages(job: LegacyImport, content: bytes) -> list[str]:
+def _read_pages(job: LegacyImport, content: bytes) -> tuple[list[str], bool]:
     """Pages are read several at a time (LEGACY_READ_WORKERS), not one by one: each page is an
     independent round trip to the model, so there is nothing to wait for between them."""
     total = job.pages_total
     pages: list[str] = [""] * total
     failed = 0
     done = 0
+    handwritten = False
     with ThreadPoolExecutor(max_workers=settings.LEGACY_READ_WORKERS) as pool:
         futures = {
-            pool.submit(_read_one_page, content, number, job.reader): number
+            pool.submit(_read_one_page, content, job.mime_type, number, job.reader): number
             for number in range(1, total + 1)
         }
         # as_completed() hands results back to this one thread, so updating `pages`, `failed`
         # and the job's progress here needs no lock even though the reading itself is parallel.
         for future in as_completed(futures):
             number = futures[future]
-            text = future.result()
+            text, looks_handwritten = future.result()
             pages[number - 1] = text
+            handwritten = handwritten or bool(looks_handwritten)
             if not text:
                 failed += 1
             done += 1
             _set(job, pages_done=done, step_note=f"Read {done} of {total} pages")
-    if failed == total:
+    if failed == total and job.reader == "chatgpt":
         raise LegacyError("No page could be read. Check the OpenAI key and credit balance.")
-    return pages
+    return pages, handwritten
 
 
 def _summarise(text: str, kind: str) -> str:
     prompt = REPORT_PROMPT.format(kind=KIND_LABEL.get(kind, "document"), text=text[:SUMMARY_CHARS])
     return llm.complete(prompt, max_tokens=SUMMARY_TOKENS) or ""
+
+
+def _with_guessed_fields(fields: dict[str, str], pages: list[str], office) -> dict[str, str]:
+    """Fills any gap the model left (or, with no AI at all, everything) with the same free
+    pattern-matching the old single-letter intake used, run over the pages' own text."""
+    guess = intake.guess_fields("\n\n".join(pages), office)
+    fields = dict(fields)
+    for key, value in {
+        "name": guess.name,
+        "phone": guess.phone,
+        "address": guess.address,
+        "subject": guess.subject,
+        "summary": guess.description,
+    }.items():
+        if not fields.get(key):
+            fields[key] = value
+    if not fields.get("village") and guess.village_id:
+        village = office.village_set.filter(pk=guess.village_id).first()
+        if village:
+            fields["village"] = village.name
+    if not fields.get("village"):
+        fields["village_hint"] = guess.village_text
+    return fields
 
 
 def run(job_id: int) -> None:
@@ -197,42 +258,56 @@ def run(job_id: int) -> None:
         with default_storage.open(job.file, "rb") as handle:
             content = handle.read()
         _set(job, status=LegacyImport.Status.READING, step_note="Reading the pages")
-        pages = _read_pages(job, content)
+        pages, handwritten = _read_pages(job, content)
         _set(
             job,
             pages=pages,
             status=LegacyImport.Status.ANALYSING,
             step_note="Working out which pages are which document",
         )
-        segments = file_splitter.segment_pages(pages, with_summaries=False)
-        if not segments:  # one more try: a model sometimes answers badly the first time
+        if job.reader == "none":
+            # No AI at all: one bare document (the whole upload), nothing pre-filled, for the
+            # user to type in themselves on the next screen.
+            segments = [
+                file_splitter.Segment(1, job.pages_total, "complaint", None, "", "", "", "")
+            ]
+            read_dates: dict[int, date | None] = {1: None}
+            fields: dict[str, str] = {}
+            summaries = [""]
+        else:
             segments = file_splitter.segment_pages(pages, with_summaries=False)
-        if not segments:
-            raise LegacyError("The AI could not work out the documents in this file. Try again.")
-        today = timezone.localdate()
-        read_dates = {s.first: s.date for s in segments}
-        segments = file_splitter.order_segments(segments, today)
-        _set(job, status=LegacyImport.Status.SUMMARISING)
-        _set(job, step_note=f"Summarising {len(segments)} document(s)")
-        original = next((s for s in segments if s.kind == "complaint"), segments[0])
-        village_names = list(
-            job.office.village_set.filter(is_active=True).values_list("name", flat=True)
-        )
-        original_text = "\n\n".join(pages[original.first - 1 : original.last])
-        texts = ["\n\n".join(pages[s.first - 1 : s.last]) for s in segments]
-        # Each document's summary, and the complaint's own fields, are independent of each
-        # other, so they go out together rather than one after another.
-        with ThreadPoolExecutor(max_workers=settings.LEGACY_READ_WORKERS) as pool:
-            fields_future = pool.submit(
-                extract_complaint_fields_unmasked, original_text, village_names
-            )
-            summaries = list(
-                pool.map(
-                    lambda i: _summarise(texts[i], segments[i].kind) if texts[i].strip() else "",
-                    range(len(segments)),
+            if not segments:  # one more try: a model sometimes answers badly the first time
+                segments = file_splitter.segment_pages(pages, with_summaries=False)
+            if not segments:
+                raise LegacyError(
+                    "The AI could not work out the documents in this file. Try again."
                 )
+            today = timezone.localdate()
+            read_dates = {s.first: s.date for s in segments}
+            segments = file_splitter.order_segments(segments, today)
+            _set(job, status=LegacyImport.Status.SUMMARISING)
+            _set(job, step_note=f"Summarising {len(segments)} document(s)")
+            original = next((s for s in segments if s.kind == "complaint"), segments[0])
+            village_names = list(
+                job.office.village_set.filter(is_active=True).values_list("name", flat=True)
             )
-            fields = fields_future.result()
+            original_text = "\n\n".join(pages[original.first - 1 : original.last])
+            texts = ["\n\n".join(pages[s.first - 1 : s.last]) for s in segments]
+            # Each document's summary, and the complaint's own fields, are independent of each
+            # other, so they go out together rather than one after another.
+            with ThreadPoolExecutor(max_workers=settings.LEGACY_READ_WORKERS) as pool:
+                fields_future = pool.submit(
+                    extract_complaint_fields_unmasked, original_text, village_names
+                )
+                summaries = list(
+                    pool.map(
+                        lambda i: (
+                            _summarise(texts[i], segments[i].kind) if texts[i].strip() else ""
+                        ),
+                        range(len(segments)),
+                    )
+                )
+                fields = fields_future.result()
         items = [
             {
                 "first": s.first,
@@ -247,11 +322,12 @@ def run(job_id: int) -> None:
             }
             for s, summary in zip(segments, summaries, strict=True)
         ]
+        fields = _with_guessed_fields(fields, pages, job.office)
         _set(
             job,
             status=LegacyImport.Status.READY,
             step_note="",
-            proposal={"fields": fields, "documents": items},
+            proposal={"fields": fields, "documents": items, "handwritten": handwritten},
         )
     except LegacyError as error:
         _set(job, status=LegacyImport.Status.FAILED, error=str(error), step_note="")
@@ -278,6 +354,7 @@ def add_history_stage(
     complaint: Complaint,
     actor,
     content: bytes,
+    mime_type: str,
     pages: list[str],
     first: int,
     last: int,
@@ -291,16 +368,17 @@ def add_history_stage(
     unsure_date: bool,
     filename_stem: str,
 ) -> None:
-    """One document of the old file: its own PDF, its own summary, its own dated stage."""
-    part = file_splitter.split_pdf(content, first, last)
+    """One document of the old file: its own file, its own summary, its own dated stage."""
+    part = _slice(content, mime_type, first, last)
     if part is None:
-        raise LegacyError("The PDF could not be cut into documents.")
+        raise LegacyError("The file could not be cut into documents.")
+    ext = settings.ALLOWED_UPLOAD_TYPES[mime_type]
     document = store_document(
         complaint,
         Attachment(
             part,
-            f"{filename_stem}-pages-{first}-{last}.pdf",
-            "application/pdf",
+            f"{filename_stem}-pages-{first}-{last}{ext}",
+            mime_type,
             extracted_text="\n\n".join(pages[first - 1 : last]),
             text_status=Document.TextStatus.DONE,
             page_count=last - first + 1,
@@ -332,14 +410,25 @@ def create_complaint(job: LegacyImport, actor, data: dict[str, Any], documents: 
     received_on = min([data["received_on"], *dates])
     stem = job.filename.rsplit(".", 1)[0][:60]
     with transaction.atomic():
-        complainant = Complainant.objects.create(
-            office=job.office,
-            name=data["name"],
-            phone=data["phone"],
-            address=data["address"],
-            village=data["village"],
-        )
-        tag, _ = Tag.objects.get_or_create(office=job.office, name=TAG_LEGACY)
+        complainant = None
+        if data["phone"]:
+            complainant = Complainant.objects.filter(office=job.office, phone=data["phone"]).first()
+        if complainant is None:
+            complainant = Complainant.objects.create(
+                office=job.office,
+                name=data["name"],
+                phone=data["phone"],
+                address=data["address"],
+                village=data["village"],
+            )
+        # Flags an AI-assisted reading for a spot check; nothing to check when nothing read it.
+        tags = []
+        if job.reader != "none":
+            tags = [Tag.objects.get_or_create(office=job.office, name=TAG_LEGACY)[0]]
+        if data.get("new_tag"):
+            existing = Tag.objects.filter(office=job.office, name__iexact=data["new_tag"]).first()
+            tags.append(existing or Tag.objects.create(office=job.office, name=data["new_tag"]))
+        tags += list(data.get("tags") or [])
         complaint = register_complaint(
             office=job.office,
             complainant=complainant,
@@ -350,11 +439,13 @@ def create_complaint(job: LegacyImport, actor, data: dict[str, Any], documents: 
             description=data["description"],
             external_ref=data["external_ref"],
             village=data["village"],
-            tags=[tag],
+            category=data.get("category"),
+            tags=tags,
+            related_to=data.get("related_to"),
             attachment=Attachment(
                 content,
                 job.filename,
-                "application/pdf",
+                job.mime_type,
                 extracted_text="\n\n".join(job.pages),
                 text_status=Document.TextStatus.DONE,
                 page_count=job.pages_total,
@@ -362,11 +453,27 @@ def create_complaint(job: LegacyImport, actor, data: dict[str, Any], documents: 
             ),
             at=stage_time(received_on),
         )
+        # The one document found is the whole upload (the ordinary case for a fresh, single
+        # letter): the "Complaint received" stage above already carries this exact file, so a
+        # second, separately-named copy of the same content on its own stage would just
+        # duplicate it. A real old file, with more than one document, is unaffected.
+        whole_file = (
+            len(documents) == 1
+            and documents[0]["first"] == 1
+            and documents[0]["last"] == job.pages_total
+        )
+        if whole_file and data["description"]:  # the summary still belongs on the document
+            Document.objects.filter(complaint=complaint, kind=Document.Kind.COMPLAINT).update(
+                summary=data["description"][:2000]
+            )
         for item in documents:  # oldest first
+            if whole_file:
+                continue
             add_history_stage(
                 complaint,
                 actor,
                 content,
+                job.mime_type,
                 job.pages,
                 item["first"],
                 item["last"],
@@ -379,7 +486,8 @@ def create_complaint(job: LegacyImport, actor, data: dict[str, Any], documents: 
                 unsure_date=item["date_unsure"],
                 filename_stem=stem,
             )
-        _bring_up_to_date(complaint, actor, data, dates)
+        if data.get("department"):  # marking it starts the department's reply clock
+            _bring_up_to_date(complaint, actor, data, dates)
         job.complaint = complaint
         job.status = LegacyImport.Status.DONE
         job.save(update_fields=["complaint", "status", "updated_at"])
@@ -395,7 +503,7 @@ def _bring_up_to_date(complaint: Complaint, actor, data: dict[str, Any], dates: 
         Action.ISSUE_NOTICE,
         actor,
         department=data["department"],
-        remarks="Added from a legacy file",
+        remarks="Marked when registered",
         at=base,
     )
     state = data["current_state"]

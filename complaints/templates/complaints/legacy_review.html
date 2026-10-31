@@ -1,10 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Check the legacy complaint - SDM Complaint Tracker{% endblock %}
+{% block title %}Check the complaint - SDM Complaint Tracker{% endblock %}
 {% block content %}
 <article class="narrow wide">
-  <h2>Check the legacy complaint</h2>
-  <p class="muted">{{ job.filename }} &middot; {{ job.pages_total }} pages &middot; {{ docs|length }} documents found. Correct anything that is wrong, untick what should not be added, then create the complaint.</p>
-  <form method="post">
+  <h2>Check the complaint</h2>
+  <p class="muted">{{ job.filename }} &middot; {{ job.pages_total }} page{{ job.pages_total|pluralize }} &middot; {{ docs|length }} document{{ docs|length|pluralize }} found. Correct anything that is wrong, untick what should not be added, then save.</p>
+  {% if handwritten %}
+  <p class="warning-box">This letter looks <strong>handwritten</strong>, so the local reading, and anything built on it, may contain mistakes. Please check every field against the original, or choose the ChatGPT reader instead.</p>
+  {% endif %}
+  {% if village_hint %}
+  <p class="muted">The letter mentions the village <strong>{{ village_hint }}</strong>, which is not in the village list. Pick the right village, or ask an admin to add it.</p>
+  {% endif %}
+
+  {% if duplicates %}
+  <section class="warning-box" role="alert">
+    <h4>Possibly related complaints</h4>
+    <ul>
+      {% for c, reason in duplicates %}
+      <li>
+        <a href="{% url 'complaints:detail' c.pk %}" target="_blank" rel="noopener">{{ c.ref_no }}</a>
+        - {{ c.subject }} ({{ reason }})
+        <button type="submit" form="legacy-form" name="related_to" value="{{ c.pk }}" class="outline">Save as related to {{ c.ref_no }}</button>
+      </li>
+      {% endfor %}
+    </ul>
+    <p>If none of these is the same issue, use "Save".</p>
+  </section>
+  {% endif %}
+
+  <form method="post" id="legacy-form">
     {% csrf_token %}
     {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
     <h4 class="section-title">The complaint</h4>
@@ -28,7 +51,7 @@
       {% endfor %}
     </ol>
     <div class="form-buttons">
-      <button type="submit">Create the complaint with this history</button>
+      <button type="submit">{% if duplicates %}Save as new complaint{% else %}Save{% endif %}</button>
       <a role="button" class="secondary outline" href="{% url 'complaints:legacy_upload' %}">Cancel</a>
     </div>
   </form>

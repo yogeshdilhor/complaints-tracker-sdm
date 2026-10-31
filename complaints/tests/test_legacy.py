@@ -59,7 +59,7 @@ def upload(client, **extra):
 
 def test_the_button_is_in_the_top_bar(login, clerk, office):  # noqa: F811
     html = login(clerk).get(reverse("complaints:list")).content.decode()
-    assert "Legacy complaint" in html
+    assert "Register complaint" in html
 
 
 def test_upload_reads_splits_and_waits_for_checking(login, clerk, fake_ai):  # noqa: F811
@@ -72,7 +72,7 @@ def test_upload_reads_splits_and_waits_for_checking(login, clerk, fake_ai):  # n
     assert all(d["summary"] == "A fifty word summary." for d in docs)
     assert Complaint.objects.count() == 0  # nothing is created before the check
     html = client.get(response["Location"]).content.decode()
-    assert "Check the legacy complaint" in html and "Misbehaviour at Patwar Bhavan" in html
+    assert "Check the complaint" in html and "Misbehaviour at Patwar Bhavan" in html
 
 
 def test_confirming_creates_the_complaint_with_one_dated_stage_per_document(
@@ -177,12 +177,14 @@ def test_legacy_confirm_accepts_a_typed_department_instead_of_a_choice(
     assert complaint.current_department.concerned_department.name == "Revenue"
 
 
-def test_legacy_confirm_needs_a_department_choice_or_a_typed_name(
+def test_leaving_the_department_blank_registers_it_unmarked(
     login,  # noqa: F811
     clerk,
     village,
     fake_ai,
 ):
+    """Not every complaint is marked to someone the moment it is registered; leaving the
+    department blank is fine, and the complaint simply stays RECEIVED, not AWAITING_REPORT."""
     client = login(clerk)
     upload(client)
     job = LegacyImport.objects.get()
@@ -195,8 +197,9 @@ def test_legacy_confirm_needs_a_department_choice_or_a_typed_name(
         "keep_0": "on",
     }
     response = client.post(reverse("complaints:legacy_status", args=[job.pk]), data)
-    assert response.status_code == 200 and Complaint.objects.count() == 0
-    assert "Choose who this goes to, or write the name." in response.content.decode()
+    assert response.status_code == 302
+    complaint = Complaint.objects.get()
+    assert complaint.current_state == State.RECEIVED and complaint.current_department is None
 
 
 def test_an_unreadable_file_fails_with_a_plain_message(login, clerk, fake_ai, monkeypatch):  # noqa: F811
