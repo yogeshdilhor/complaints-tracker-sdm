@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 
@@ -81,7 +82,11 @@ def complete(prompt: str, *, max_tokens: int, as_json: bool = False) -> str | No
     return _post(payload, f"{len(prompt)} characters")
 
 
-def _post(payload: dict, what: str) -> str | None:
+RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BACKOFF = 2  # seconds; doubled on each retry, unless the response says how long to wait
+
+
+def _post(payload: dict, what: str, *, _attempt: int = 0) -> str | None:
     request = urllib.request.Request(  # noqa: S310 - fixed https URL
         URL,
         data=json.dumps(payload).encode(),
@@ -96,6 +101,13 @@ def _post(payload: dict, what: str) -> str | None:
             data = json.load(response)
         text = (data["choices"][0]["message"]["content"] or "").strip()
     except urllib.error.HTTPError as error:
+        if error.code == 429 and _attempt < RATE_LIMIT_RETRIES:
+            # Several pages are asked about at once; that can outrun the account's own rate
+            # limit. Wait and try again rather than count a rate-limited page as unreadable.
+            wait = float(error.headers.get("Retry-After", 0)) or RATE_LIMIT_BACKOFF * (2**_attempt)
+            logger.info("Rate limited; waiting %.1fs before retry %d", wait, _attempt + 1)
+            time.sleep(wait)
+            return _post(payload, what, _attempt=_attempt + 1)
         logger.warning("LLM call failed: HTTP %s %s", error.code, error.read()[:300])
         return None
     except Exception:  # network, JSON or shape errors: never block the page

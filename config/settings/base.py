@@ -115,6 +115,9 @@ VISION_MAX_PAGES = env.int("VISION_MAX_PAGES", default=6)
 LEGACY_MAX_MB = env.int("LEGACY_MAX_MB", default=150)
 LEGACY_MAX_PAGES = env.int("LEGACY_MAX_PAGES", default=150)
 LEGACY_RUN_INLINE = env.bool("LEGACY_RUN_INLINE", default=False)  # tests run it in the request
+# Pages (and later, document summaries) are read from the model this many at a time, not one by
+# one. Higher is faster but risks hitting the OpenAI account's own rate limit more often.
+LEGACY_READ_WORKERS = env.int("LEGACY_READ_WORKERS", default=4)
 OPENAI_REASONING_EFFORT = env("OPENAI_REASONING_EFFORT", default="")  # "" = model default
 # Scanned pages read below this Tesseract confidence (0-100) are treated as handwriting.
 TYPED_MIN_OCR_CONFIDENCE = env.int("TYPED_MIN_OCR_CONFIDENCE", default=70)

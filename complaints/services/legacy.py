@@ -12,6 +12,7 @@ import logging
 import re
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time
 from typing import Any
 
@@ -146,22 +147,39 @@ def _set(job: LegacyImport, **fields: Any) -> None:
         setattr(job, name, value)
 
 
+def _read_one_page(content: bytes, number: int, reader: str) -> str:
+    part = file_splitter.split_pdf(content, number, number)
+    text: str | None = None
+    if part is not None and reader == "chatgpt":
+        images = page_images(part, "application/pdf", max_pages=1)
+        text = llm.read_page(images[0]) if images else None
+    elif part is not None:
+        text = extract(part, "application/pdf").text.strip()
+    return (text or "").strip()
+
+
 def _read_pages(job: LegacyImport, content: bytes) -> list[str]:
+    """Pages are read several at a time (LEGACY_READ_WORKERS), not one by one: each page is an
+    independent round trip to the model, so there is nothing to wait for between them."""
     total = job.pages_total
-    pages: list[str] = []
+    pages: list[str] = [""] * total
     failed = 0
-    for number in range(1, total + 1):
-        part = file_splitter.split_pdf(content, number, number)
-        text: str | None = None
-        if part is not None and job.reader == "chatgpt":
-            images = page_images(part, "application/pdf", max_pages=1)
-            text = llm.read_page(images[0]) if images else None
-        elif part is not None:
-            text = extract(part, "application/pdf").text.strip()
-        if text is None:
-            failed += 1
-        pages.append((text or "").strip())
-        _set(job, pages_done=len(pages), step_note=f"Read {len(pages)} of {total} pages")
+    done = 0
+    with ThreadPoolExecutor(max_workers=settings.LEGACY_READ_WORKERS) as pool:
+        futures = {
+            pool.submit(_read_one_page, content, number, job.reader): number
+            for number in range(1, total + 1)
+        }
+        # as_completed() hands results back to this one thread, so updating `pages`, `failed`
+        # and the job's progress here needs no lock even though the reading itself is parallel.
+        for future in as_completed(futures):
+            number = futures[future]
+            text = future.result()
+            pages[number - 1] = text
+            if not text:
+                failed += 1
+            done += 1
+            _set(job, pages_done=done, step_note=f"Read {done} of {total} pages")
     if failed == total:
         raise LegacyError("No page could be read. Check the OpenAI key and credit balance.")
     return pages
@@ -195,31 +213,40 @@ def run(job_id: int) -> None:
         read_dates = {s.first: s.date for s in segments}
         segments = file_splitter.order_segments(segments, today)
         _set(job, status=LegacyImport.Status.SUMMARISING)
-        items = []
-        for number, s in enumerate(segments, 1):
-            _set(job, step_note=f"Summarising document {number} of {len(segments)}")
-            text = "\n\n".join(pages[s.first - 1 : s.last])
-            items.append(
-                {
-                    "first": s.first,
-                    "last": s.last,
-                    "kind": s.kind,
-                    "date": s.date.isoformat() if s.date else "",
-                    "date_unsure": read_dates.get(s.first) != s.date,
-                    "sender": s.sender,
-                    "to": s.to,
-                    "headline": s.headline,
-                    "summary": _summarise(text, s.kind) if text.strip() else "",
-                }
-            )
+        _set(job, step_note=f"Summarising {len(segments)} document(s)")
         original = next((s for s in segments if s.kind == "complaint"), segments[0])
         village_names = list(
             job.office.village_set.filter(is_active=True).values_list("name", flat=True)
         )
-        fields = extract_complaint_fields_unmasked(
-            "\n\n".join(pages[original.first - 1 : original.last]),
-            village_names,
-        )
+        original_text = "\n\n".join(pages[original.first - 1 : original.last])
+        texts = ["\n\n".join(pages[s.first - 1 : s.last]) for s in segments]
+        # Each document's summary, and the complaint's own fields, are independent of each
+        # other, so they go out together rather than one after another.
+        with ThreadPoolExecutor(max_workers=settings.LEGACY_READ_WORKERS) as pool:
+            fields_future = pool.submit(
+                extract_complaint_fields_unmasked, original_text, village_names
+            )
+            summaries = list(
+                pool.map(
+                    lambda i: _summarise(texts[i], segments[i].kind) if texts[i].strip() else "",
+                    range(len(segments)),
+                )
+            )
+            fields = fields_future.result()
+        items = [
+            {
+                "first": s.first,
+                "last": s.last,
+                "kind": s.kind,
+                "date": s.date.isoformat() if s.date else "",
+                "date_unsure": read_dates.get(s.first) != s.date,
+                "sender": s.sender,
+                "to": s.to,
+                "headline": s.headline,
+                "summary": summary,
+            }
+            for s, summary in zip(segments, summaries, strict=True)
+        ]
         _set(
             job,
             status=LegacyImport.Status.READY,

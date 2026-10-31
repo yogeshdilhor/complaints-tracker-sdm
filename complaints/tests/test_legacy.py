@@ -21,13 +21,19 @@ FIELDS = {
 }
 
 
+def _page_number_of(image: bytes) -> int:
+    """Pages are now read in parallel, so the fake reader below must say which page an "image"
+    is for by its own content (the page number split_pdf below baked into it), not by the order
+    read_page happens to be called in."""
+    return int(image.decode().rsplit(" ", 1)[-1].split("-")[0])
+
+
 @pytest.fixture
 def fake_ai(monkeypatch, settings):
     settings.OPENAI_API_KEY = "k"
     monkeypatch.setattr(legacy, "count_pages", lambda content: len(PAGES))
-    reads = iter(PAGES)
-    monkeypatch.setattr(legacy, "page_images", lambda *a, **k: [b"image"])
-    monkeypatch.setattr(legacy.llm, "read_page", lambda image: next(reads))
+    monkeypatch.setattr(legacy, "page_images", lambda part, *a, **k: [part])
+    monkeypatch.setattr(legacy.llm, "read_page", lambda image: PAGES[_page_number_of(image) - 1])
     monkeypatch.setattr(
         fs,
         "split_pdf",
@@ -172,10 +178,10 @@ def test_legacy_confirm_accepts_a_typed_department_instead_of_a_choice(
 
 
 def test_legacy_confirm_needs_a_department_choice_or_a_typed_name(
-    login,
+    login,  # noqa: F811
     clerk,
     village,
-    fake_ai,  # noqa: F811
+    fake_ai,
 ):
     client = login(clerk)
     upload(client)
