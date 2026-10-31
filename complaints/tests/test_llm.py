@@ -100,6 +100,8 @@ def test_one_handwritten_page_in_a_mixed_pdf_makes_it_handwritten(tools):  # noq
 
 
 def test_handwritten_letters_are_still_sent_but_flagged(login, clerk, monkeypatch, settings):  # noqa: F811
+    # The masked (text) choice specifically: vision mode (the default now) has no need to skip
+    # or flag handwriting, since reading images is its whole point.
     settings.OPENAI_API_KEY = "k"
     calls = []
     monkeypatch.setattr(
@@ -111,7 +113,7 @@ def test_handwritten_letters_are_still_sent_but_flagged(login, clerk, monkeypatc
         lambda *a, **k: calls.append(a) or {},
     )
     client = login(clerk)
-    upload_step(client)
+    upload_step(client, ai_provider="openai")
     html = client.get(reverse("complaints:intake_review")).content.decode()
     assert len(calls) == 1 and "handwritten" in html
 
@@ -156,6 +158,43 @@ def test_a_handwritten_document_gets_no_summary(login, clerk, complaint, make_do
     assert "handwritten" in html
     doc.refresh_from_db()
     assert doc.summary == ""
+
+
+def test_new_complaints_default_to_vision_and_prefill_phone_and_named_complainants(
+    login,  # noqa: F811
+    clerk,
+    monkeypatch,
+    settings,  # noqa: F811
+):
+    """The default for registering a new complaint (not the "add a document" flow elsewhere) is
+    vision reading, because that is the only path that can read the phone number and name
+    specific co-complainants, not just say "Multiple complainants"."""
+    settings.OPENAI_API_KEY = "k"
+    seen = {}
+
+    def fake_images(prompt, images, **kw):
+        seen["images"], seen["prompt"] = images, prompt
+        return json.dumps(
+            {
+                "summary": "Farmers ask for the canal khal to be cleared.",
+                "subject": "Canal obstruction",
+                "name": "Multiple complainants (Kalu Ram, Surender)",
+                "phone": "9876543210",
+                "address": "Village Baluana",
+            }
+        )
+
+    monkeypatch.setattr(llm, "complete_with_images", fake_images)
+    monkeypatch.setattr("complaints.views.page_images", lambda content, mime: [b"\xff\xd8\xffjpg"])
+    monkeypatch.setattr(
+        "complaints.views.extract", lambda content, mime: Extraction("", "done", 1, typed=False)
+    )
+    client = login(clerk)
+    upload_step(client)  # no ai_provider given: the default should still be vision
+    html = client.get(reverse("complaints:intake_review")).content.decode()
+    assert seen["images"] == [b"\xff\xd8\xffjpg"]
+    assert "Multiple complainants (Kalu Ram, Surender)" in html
+    assert "9876543210" in html
 
 
 def test_vision_upload_sends_page_images_to_openai_and_prefills(

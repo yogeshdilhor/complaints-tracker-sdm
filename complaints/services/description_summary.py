@@ -185,8 +185,13 @@ VISION_FIELDS_PROMPT = (
     '"name": who is complaining. If a Sarpanch\'s seal or stamp is on the letter, write '
     '"Sarpanch, Gram Panchayat <village on the seal>" (or just "Sarpanch"), even when many '
     "people also signed. If there is no such seal and the letter is signed by several people, "
-    'write "Multiple complainants". Otherwise the single complainant\'s own name.\n'
-    '"phone": the complainant\'s 10-digit mobile number, digits only\n'
+    'write "Multiple complainants" followed by the names you can clearly read, in brackets, '
+    'for example "Multiple complainants (Kalu Ram, Surender, Pawan)"; leave a name out if it '
+    'is not clearly legible, and write just "Multiple complainants" if none are legible. '
+    "Otherwise the single complainant's own name.\n"
+    '"phone": the complainant\'s 10-digit mobile number, digits only. Look at the whole '
+    "letter for it, including the margins and the space below the signature, not only near "
+    "the name.\n"
     '"address": the complainant\'s address as written\n'
     '"village": the village the complaint is about, chosen from this list if it matches, '
     "otherwise as written: {villages}\n"

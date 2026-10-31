@@ -613,13 +613,16 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
     if not perms.can(request.user, perms.ADD_STAGE, complaint):
         return HttpResponseForbidden("You are not allowed to do this.")
     _decorate(complaint)
-    upload_page = {"complaint": complaint, "form": IntakeUploadForm()}
+    upload_page = {
+        "complaint": complaint,
+        "form": IntakeUploadForm(default_ai_provider="openai"),
+    }
     types = _stage_type_choices(request.user, complaint)
     valid = {key for key, _ in types}
     meta = request.session.get(STAGE_SESSION_KEY)
 
     if request.method == "POST":
-        form = IntakeUploadForm(request.POST, request.FILES)
+        form = IntakeUploadForm(request.POST, request.FILES, default_ai_provider="openai")
         if not form.is_valid():
             return render(request, "complaints/_stage_upload.html", upload_page | {"form": form})
         attachment = form.cleaned_data["file"]

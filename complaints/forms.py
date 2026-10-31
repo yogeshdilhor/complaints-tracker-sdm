@@ -556,27 +556,38 @@ class EditDetailsForm(forms.Form):
 
 
 AI_CHOICES = [
-    ("openai", "ChatGPT (gpt-6-luna)"),
     (
         "openai_vision",
-        "ChatGPT reading page images (sends the pages unmasked)",
+        "ChatGPT reading the page images (best for finding the phone number and every "
+        "complainant's name; sends the pages unmasked)",
+    ),
+    (
+        "openai",
+        "ChatGPT reading the extracted text (masked; phone and name are only guessed, not "
+        "read by the model)",
     ),
     ("none", "Do not use AI"),
 ]
 
 
 class IntakeUploadForm(forms.Form):
+    """`default_ai_provider` is "openai_vision" for registering a new complaint (it is the only
+    way to read the phone number and every complainant's name), and "openai" where this form is
+    reused for a report or other document added to a complaint already under way."""
+
     file = AttachmentField(required=True, label="Complaint (PDF, JPG or PNG, max 10 MB)")
     ai_provider = forms.ChoiceField(
-        choices=AI_CHOICES,
-        widget=forms.RadioSelect,
-        label="Read and summarise with",
-        initial="openai",
-        required=False,
+        choices=AI_CHOICES, widget=forms.RadioSelect, label="Read and summarise with"
     )
 
+    def __init__(self, *args, default_ai_provider: str = "openai_vision", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._default_ai_provider = default_ai_provider
+        self.fields["ai_provider"].initial = default_ai_provider
+        self.fields["ai_provider"].required = False
+
     def clean_ai_provider(self) -> str:
-        return self.cleaned_data.get("ai_provider") or "openai"
+        return self.cleaned_data.get("ai_provider") or self._default_ai_provider
 
 
 class IntakeForm(DepartmentPickerMixin, forms.Form):
