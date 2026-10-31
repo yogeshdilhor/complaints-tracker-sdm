@@ -11,6 +11,7 @@ from django.utils import timezone
 from complaints.models import Complaint, Document, Event, EventType, State
 from complaints.services.documents import Extraction
 from complaints.workflow import Action, apply_transition
+from core.models import ConcernedDepartment, Department
 
 HX = {"HTTP_HX_REQUEST": "true"}
 
@@ -546,6 +547,41 @@ def test_intake_with_a_department_marks_it_and_starts_the_clock(login, clerk, vi
     assert complaint.current_state == State.AWAITING_REPORT
     assert complaint.current_department == tehsildar
     assert complaint.referrals.get().to_department == tehsildar
+
+
+def test_intake_typed_department_is_created_and_linked_to_concerned_department(
+    login, clerk, village
+):
+    client = login(clerk)
+    upload_step(client)
+    client.post(
+        reverse("complaints:intake_review"),
+        intake_data(
+            village,
+            concerned_department_own="MICADA (Micro Irrigation)",
+            department_own="Tehsildar Dabwali",
+        ),
+    )
+    complaint = Complaint.objects.get()
+    assert complaint.current_department.name == "Tehsildar Dabwali"
+    assert complaint.current_department.concerned_department.name == "MICADA (Micro Irrigation)"
+
+    # Typing the same names again reuses both rows instead of creating duplicates.
+    second = login(clerk)
+    upload_step(second)
+    second.post(
+        reverse("complaints:intake_review"),
+        intake_data(
+            village,
+            external_ref="CMW-6",
+            confirm_duplicates=True,
+            concerned_department_own="micada (micro irrigation)",
+            department_own="tehsildar dabwali",
+        ),
+    )
+    assert Complaint.objects.count() == 2
+    assert ConcernedDepartment.objects.count() == 1
+    assert Department.objects.count() == 1
 
 
 def test_intake_new_tag_is_created_once(login, clerk, village):

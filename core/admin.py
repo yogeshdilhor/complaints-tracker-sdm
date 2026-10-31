@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from .models import Category, Department, Office, User, Village
+from .models import Category, ConcernedDepartment, Department, Office, User, Village
 
 
 @admin.register(Office)
@@ -10,17 +10,31 @@ class OfficeAdmin(admin.ModelAdmin):
     search_fields = ("name", "code")
 
 
+@admin.register(ConcernedDepartment)
+class ConcernedDepartmentAdmin(admin.ModelAdmin):
+    list_display = ("name", "office")
+    list_filter = ("office",)
+    search_fields = ("name",)
+
+
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ("name", "short_name", "kind", "default_sla_days", "is_active")
-    list_filter = ("office", "kind", "is_active")
+    list_display = (
+        "name",
+        "short_name",
+        "concerned_department",
+        "kind",
+        "default_sla_days",
+        "is_active",
+    )
+    list_filter = ("office", "concerned_department", "kind", "is_active")
     search_fields = ("name", "short_name", "head_name")
 
 
 @admin.register(Village)
 class VillageAdmin(admin.ModelAdmin):
-    list_display = ("name", "name_hi", "block", "tehsil", "is_active")
-    list_filter = ("office", "tehsil", "is_active")
+    list_display = ("name", "name_hi", "block", "tehsil", "is_mc_ward", "is_active")
+    list_filter = ("office", "tehsil", "is_mc_ward", "is_active")
     search_fields = ("name", "name_hi")
 
 

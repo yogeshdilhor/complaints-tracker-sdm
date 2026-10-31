@@ -20,6 +20,28 @@ class Office(TimeStamped):
         return self.name
 
 
+class ConcernedDepartment(TimeStamped):
+    """The outside office or department a complaint concerns (Police, DHBVN, Revenue, ...).
+
+    One level above `Department`, which is the specific officer or branch a complaint gets
+    marked to. Typing a new name on the complaint form creates one of these.
+    """
+
+    office = models.ForeignKey(Office, on_delete=models.PROTECT)
+    name = models.CharField(max_length=200)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["office", "name"], name="uniq_concerned_department_office_name"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Department(TimeStamped):
     class Kind(models.TextChoices):
         INTERNAL_BRANCH = "internal_branch", "Internal branch"
@@ -29,6 +51,15 @@ class Department(TimeStamped):
     name = models.CharField(max_length=200)
     short_name = models.CharField(max_length=50)
     kind = models.CharField(max_length=30, choices=Kind.choices)
+    # The broader department this is marked under (e.g. Revenue -> Tehsildar Dabwali). Blank on
+    # older rows, and on internal branches, which have no outside department above them.
+    concerned_department = models.ForeignKey(
+        ConcernedDepartment,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="designations",
+    )
     head_name = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
@@ -51,6 +82,9 @@ class Village(TimeStamped):
     name_hi = models.CharField("name (Hindi)", max_length=200, blank=True)
     block = models.CharField(max_length=100, blank=True)
     tehsil = models.CharField(max_length=100, blank=True)
+    # A Municipal Committee ward rather than a revenue village (still one row in this table,
+    # so every view, filter and search that already handles villages handles wards too).
+    is_mc_ward = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 
     class Meta:

@@ -138,6 +138,61 @@ def test_a_closed_legacy_complaint_needs_a_reason(login, clerk, village, fake_ai
     assert done.status_code == 302 and Complaint.objects.get().current_state == State.CLOSED
 
 
+def test_legacy_confirm_accepts_a_typed_department_instead_of_a_choice(
+    login,  # noqa: F811
+    clerk,
+    office,
+    village,
+    fake_ai,
+):
+    client = login(clerk)
+    upload(client)
+    job = LegacyImport.objects.get()
+    data = {
+        "name": "Pawan Sharma",
+        "phone": "9876543210",
+        "address": "",
+        "village": village.pk,
+        "subject": "Misbehaviour at Patwar Bhavan",
+        "description": "",
+        "source_platform": "internal",
+        "external_ref": "",
+        "received_on": "2025-10-06",
+        "concerned_department_own": "Revenue",
+        "department_own": "Tehsildar Dabwali",
+        "current_state": "awaiting",
+        "closed_reason": "",
+        "keep_0": "on",
+    }
+    response = client.post(reverse("complaints:legacy_status", args=[job.pk]), data)
+    complaint = Complaint.objects.get()
+    assert response.status_code == 302
+    assert complaint.current_department.name == "Tehsildar Dabwali"
+    assert complaint.current_department.concerned_department.name == "Revenue"
+
+
+def test_legacy_confirm_needs_a_department_choice_or_a_typed_name(
+    login,
+    clerk,
+    village,
+    fake_ai,  # noqa: F811
+):
+    client = login(clerk)
+    upload(client)
+    job = LegacyImport.objects.get()
+    data = {
+        "name": "A",
+        "subject": "S",
+        "source_platform": "internal",
+        "received_on": "2025-10-06",
+        "current_state": "awaiting",
+        "keep_0": "on",
+    }
+    response = client.post(reverse("complaints:legacy_status", args=[job.pk]), data)
+    assert response.status_code == 200 and Complaint.objects.count() == 0
+    assert "Choose who this goes to, or write the name." in response.content.decode()
+
+
 def test_an_unreadable_file_fails_with_a_plain_message(login, clerk, fake_ai, monkeypatch):  # noqa: F811
     monkeypatch.setattr(legacy.llm, "read_page", lambda image: None)
     client = login(clerk)

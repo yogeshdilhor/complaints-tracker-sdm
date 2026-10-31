@@ -241,6 +241,14 @@ a.card.bucket-closed { border-left-color: #9aa3b2; }
 .wheel li[data-own] { font-style: italic; }
 .wheel-own { margin: .4rem 0 0; }
 
+/* ---------- location and department pickers ---------- */
+.loc-field { margin-bottom: .8rem; }
+.loc-kind { display: flex; gap: 1.2rem; margin-bottom: .35rem; }
+.loc-kind label { display: inline-flex; align-items: center; gap: .3rem; font-weight: 400; width: auto; }
+.loc-kind input { width: auto; margin: 0; }
+.cascade-field { display: block; }
+.cascade-own { margin-top: .35rem; }
+
 /* ---------- overdue report ---------- */
 .overdue-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
 .overdue-head h2 { margin: 0; }

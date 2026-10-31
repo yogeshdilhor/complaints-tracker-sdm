@@ -13,9 +13,9 @@ from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
 from complaints.services.search import BUCKET_CHOICES
 from complaints.services.timeline import portal_name
-from complaints.widgets import WheelWidget
+from complaints.widgets import GroupedAddSelect, VillageWidget, WheelWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
-from core.models import Category, Department, Office, Village
+from core.models import Category, ConcernedDepartment, Department, Office, Village
 
 _DATE = forms.DateInput(attrs={"type": "date"})
 
@@ -50,6 +50,92 @@ class MultiAttachmentField(forms.FileField):
 
 def _active_departments(office: Office):
     return Department.objects.filter(office=office, is_active=True)
+
+
+def _concerned_department_named(office: Office, name: str) -> ConcernedDepartment:
+    """The office's concerned department of this name, created if it does not exist yet."""
+    existing = ConcernedDepartment.objects.filter(office=office, name__iexact=name).first()
+    return existing or ConcernedDepartment.objects.create(office=office, name=name)
+
+
+def _department_named(
+    office: Office, name: str, concerned: ConcernedDepartment | None = None
+) -> Department:
+    """The office's department of this name, created if it does not exist yet."""
+    existing = Department.objects.filter(office=office, name__iexact=name).first()
+    if existing is not None:
+        if concerned and not existing.concerned_department_id:
+            existing.concerned_department = concerned
+            existing.save(update_fields=["concerned_department"])
+        return existing
+    return Department.objects.create(
+        office=office,
+        name=name,
+        short_name=name[:50],
+        kind=Department.Kind.EXTERNAL_DEPARTMENT,
+        concerned_department=concerned,
+    )
+
+
+class DepartmentPickerMixin:
+    """Adds a two-level "Concerned department" + "Marked to" pair of fields: pick from what
+    exists, or type a new one, which becomes an option next time.
+
+    A form using this declares `concerned_department` and `department` as ModelChoiceFields,
+    calls `_wire_department_fields(office)` from `__init__`, calls `_clean_department_own()`
+    from `clean()`, and calls `resolve_department()` once, right before saving, to turn any
+    typed name into a real row.
+    """
+
+    def _wire_department_fields(self, office: Office, *, required: bool = False) -> None:
+        self._office = office
+        self._department_required = required
+        concerned = ConcernedDepartment.objects.filter(office=office)
+        self.fields["concerned_department"].queryset = concerned
+        self.fields["concerned_department"].widget = GroupedAddSelect(
+            [(c.pk, str(c)) for c in concerned],
+            empty_label="Not sure yet",
+            own_placeholder="Type the department's name",
+        )
+        departments = _active_departments(office)
+        self.fields["department"].queryset = departments
+        self.fields["department"].required = False  # "Write my own" posts no id; clean() checks
+        self.fields["department"].widget = GroupedAddSelect(
+            [(d.pk, str(d)) for d in departments],
+            groups={
+                d.pk: str(d.concerned_department_id)
+                for d in departments
+                if d.concerned_department_id
+            },
+            controlled_by="concerned_department",
+            empty_label="Choose..." if required else "Not marked yet",
+            own_placeholder="Type the officer or office",
+        )
+
+    def _clean_department_own(self) -> None:
+        self._own_concerned = (self.data.get("concerned_department_own") or "").strip()
+        self._own_department = (self.data.get("department_own") or "").strip()
+        if (
+            self._department_required
+            and not self.cleaned_data.get("department")
+            and not self._own_department
+        ):
+            self.add_error("department", "Choose who this goes to, or write the name.")
+
+    def resolve_department(self) -> Department | None:
+        """Call once, right before saving: a typed name becomes a real row here."""
+        concerned = self.cleaned_data.get("concerned_department")
+        if not concerned and self._own_concerned:
+            concerned = _concerned_department_named(self._office, self._own_concerned[:200])
+            self.cleaned_data["concerned_department"] = concerned
+        department = self.cleaned_data.get("department")
+        if not department and self._own_department:
+            department = _department_named(self._office, self._own_department[:200], concerned)
+        elif department and concerned and not department.concerned_department_id:
+            department.concerned_department = concerned
+            department.save(update_fields=["concerned_department"])
+        self.cleaned_data["department"] = department
+        return department
 
 
 # ------------------------------------------------------------------ filters
@@ -235,20 +321,6 @@ class ActionForm(forms.Form):
                 self.add_error("department", "Choose who this goes to, or write the name.")
         return cleaned
 
-    def _department_named(self, name: str) -> Department:
-        """The office's department of this name, created if it does not exist yet."""
-        existing = Department.objects.filter(
-            office=self.complaint.office, name__iexact=name
-        ).first()
-        if existing is not None:
-            return existing
-        return Department.objects.create(
-            office=self.complaint.office,
-            name=name,
-            short_name=name[:50],
-            kind=Department.Kind.EXTERNAL_DEPARTMENT,
-        )
-
     def transition_data(self) -> dict[str, Any]:
         """Call inside the transaction: a typed-in officer becomes a department here."""
         data = {}
@@ -257,7 +329,7 @@ class ActionForm(forms.Form):
             if value not in (None, ""):
                 data[name] = value
         if self._new_department:
-            data["department"] = self._department_named(self._new_department)
+            data["department"] = _department_named(self.complaint.office, self._new_department)
         if self.cleaned_data.get("headline"):
             data["headline"] = self.cleaned_data["headline"]
         return data
@@ -507,7 +579,7 @@ class IntakeUploadForm(forms.Form):
         return self.cleaned_data.get("ai_provider") or "openai"
 
 
-class IntakeForm(forms.Form):
+class IntakeForm(DepartmentPickerMixin, forms.Form):
     name = forms.CharField(max_length=200, label="Complainant name")
     phone = forms.CharField(max_length=20, required=False)
     address = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
@@ -522,21 +594,25 @@ class IntakeForm(forms.Form):
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
     tags = forms.ModelMultipleChoiceField(queryset=Tag.objects.none(), required=False)
     new_tag = forms.CharField(max_length=50, required=False, label="New tag")
+    concerned_department = forms.ModelChoiceField(
+        queryset=ConcernedDepartment.objects.none(), required=False, label="Concerned department"
+    )
     department = forms.ModelChoiceField(
         queryset=Department.objects.none(),
         required=False,
         label="Marked to (department written on the paper)",
-        empty_label="Not marked yet",
     )
     related_to = forms.ModelChoiceField(queryset=Complaint.objects.none(), required=False)
     confirm_duplicates = forms.BooleanField(required=False)
 
     def __init__(self, *args, office: Office, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["village"].queryset = Village.objects.filter(office=office, is_active=True)
+        villages = Village.objects.filter(office=office, is_active=True)
+        self.fields["village"].queryset = villages
+        self.fields["village"].widget = VillageWidget(villages)
         self.fields["category"].queryset = Category.objects.filter(office=office)
         self.fields["tags"].queryset = Tag.objects.filter(office=office)
-        self.fields["department"].queryset = _active_departments(office)
+        self._wire_department_fields(office, required=False)
         self.fields["related_to"].queryset = Complaint.objects.filter(office=office)
         self.fields["related_to"].widget = forms.HiddenInput()
         self.fields["confirm_duplicates"].widget = forms.HiddenInput()
@@ -549,6 +625,11 @@ class IntakeForm(forms.Form):
         if value > timezone.localdate():
             raise ValidationError("Received date cannot be in the future.")
         return value
+
+    def clean(self):
+        cleaned = super().clean()
+        self._clean_department_own()
+        return cleaned
 
 
 class LegacyUploadForm(forms.Form):
@@ -565,7 +646,7 @@ CURRENT_STATES = [
 ]
 
 
-class LegacyConfirmForm(forms.Form):
+class LegacyConfirmForm(DepartmentPickerMixin, forms.Form):
     """The complaint details the AI found in an old file; the user checks them."""
 
     name = forms.CharField(max_length=200, label="Complainant name")
@@ -577,6 +658,9 @@ class LegacyConfirmForm(forms.Form):
     source_platform = forms.ChoiceField(choices=Platform.choices, label="Platform")
     external_ref = forms.CharField(max_length=100, required=False, label="External reference")
     received_on = forms.DateField(widget=_DATE, label="Complaint received on")
+    concerned_department = forms.ModelChoiceField(
+        queryset=ConcernedDepartment.objects.none(), required=False, label="Concerned department"
+    )
     department = forms.ModelChoiceField(
         queryset=Department.objects.none(), label="Currently with (or last marked to)"
     )
@@ -585,14 +669,17 @@ class LegacyConfirmForm(forms.Form):
 
     def __init__(self, *args, office: Office, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["village"].queryset = Village.objects.filter(office=office, is_active=True)
-        self.fields["department"].queryset = _active_departments(office)
+        villages = Village.objects.filter(office=office, is_active=True)
+        self.fields["village"].queryset = villages
+        self.fields["village"].widget = VillageWidget(villages)
+        self._wire_department_fields(office, required=True)
 
     def clean_phone(self) -> str:
         return normalise_phone(self.cleaned_data["phone"])
 
     def clean(self):
         cleaned = super().clean()
+        self._clean_department_own()
         if (
             cleaned.get("current_state") == "closed"
             and not cleaned.get("closed_reason", "").strip()

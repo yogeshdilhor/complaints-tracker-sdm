@@ -1119,6 +1119,7 @@ def intake_review(request: HttpRequest) -> HttpResponse:
                 village=cd["village"],
             )
         if not duplicates:
+            form.resolve_department()  # a typed concerned department / marked-to becomes real
             complaint = _save_intake(request, cd, attachment, office)
             request.session.pop(INTAKE_SESSION_KEY, None)
             return redirect("complaints:detail", pk=complaint.pk)
@@ -1272,6 +1273,7 @@ def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
                 kept.append(item | {"headline": headline[:150]})
         if form.is_valid() and kept:
             kept.sort(key=lambda d: (d["date"] or "9999", d["first"]))
+            form.resolve_department()  # a typed concerned department / marked-to becomes real
             try:
                 complaint = legacy.create_complaint(job, request.user, form.cleaned_data, kept)
             except (legacy.LegacyError, DuplicateDocument) as exc:
