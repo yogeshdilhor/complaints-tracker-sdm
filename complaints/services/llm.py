@@ -39,7 +39,9 @@ def complete_with_images(
     payload: dict = {
         "model": MODEL,
         "messages": [{"role": "user", "content": parts}],
-        "max_completion_tokens": max_tokens,
+        # The model thinks before answering even when nothing asks it to; without this
+        # headroom a long reply can come back empty, the thinking having used the whole budget.
+        "max_completion_tokens": max_tokens + REASONING_HEADROOM,
     }
     if as_json:
         payload["response_format"] = {"type": "json_object"}
@@ -67,8 +69,11 @@ def complete(prompt: str, *, max_tokens: int, as_json: bool = False) -> str | No
     effort = settings.OPENAI_REASONING_EFFORT
     if effort == "off":
         payload["reasoning_effort"] = None
-    elif effort:
-        payload["reasoning_effort"] = effort
+    else:
+        if effort:
+            payload["reasoning_effort"] = effort
+        # The model thinks before answering even at the default effort; without this headroom
+        # a long reply can come back empty, the thinking having used the whole budget.
         max_tokens += REASONING_HEADROOM
     payload["max_completion_tokens"] = max_tokens
     if as_json:

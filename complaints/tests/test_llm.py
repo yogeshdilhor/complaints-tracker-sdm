@@ -47,7 +47,8 @@ def test_openai_provider_request(settings, sent):
     assert sent["url"] == "https://api.openai.com/v1/chat/completions"
     assert sent["headers"]["authorization"] == "Bearer key-o"
     body = sent["body"]
-    assert body["model"] == "gpt-6-luna" and body["max_completion_tokens"] == 300
+    assert body["model"] == "gpt-6-luna"
+    assert body["max_completion_tokens"] == 300 + llm.REASONING_HEADROOM
     assert "max_tokens" not in body and "reasoning_effort" not in body
     assert body["response_format"] == {"type": "json_object"}
 
