@@ -170,6 +170,9 @@ a.card.bucket-closed { border-left-color: #9aa3b2; }
 /* ---------- detail pane ---------- */
 .overview { padding-bottom: .9rem; border-bottom: 1px solid var(--line); }
 .brief { margin: 0 0 .7rem; font-size: .92rem; line-height: 1.6; color: var(--ink); }
+.brief-wrap { margin-bottom: .7rem; }
+.brief-wrap .brief { margin-bottom: .3rem; }
+.lang-toggle { width: auto; margin: 0; padding: .15rem .6rem; font-size: .78rem; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: 0; font-size: .82rem; }
 .facts dt { color: var(--muted-ink); }
 .facts dd { margin: 0; color: var(--ink); }

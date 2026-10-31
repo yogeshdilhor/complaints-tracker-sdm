@@ -1,0 +1,20 @@
+{% comment %}
+Context: complaint. Both languages are rendered once translated; toggling after that is pure
+client-side (static/js/translate.js), no further request.
+{% endcomment %}
+<div class="brief-wrap" id="desc-wrap-{{ complaint.pk }}">
+  {% if complaint.description %}
+  <p class="brief lang-orig"{% if complaint.description_translated %} hidden{% endif %}>{{ complaint.description|linebreaksbr }}</p>
+  {% if complaint.description_translated %}
+  <p class="brief lang-trans">{{ complaint.description_translated|linebreaksbr }}</p>
+  <button type="button" class="lang-toggle" data-swap="desc-wrap-{{ complaint.pk }}"
+          data-label-orig="Show original" data-label-trans="Show translation">Show original</button>
+  {% else %}
+  <button type="button" class="lang-toggle" hx-post="{% url 'complaints:complaint_translate' complaint.pk %}"
+          hx-target="#desc-wrap-{{ complaint.pk }}" hx-swap="outerHTML"
+          onclick="this.textContent='Translating…';this.disabled=true;">Translate</button>
+  {% endif %}
+  {% else %}
+  <span class="muted">No summary recorded.</span>
+  {% endif %}
+</div>

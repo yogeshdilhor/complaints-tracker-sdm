@@ -88,6 +88,10 @@ class Complaint(TimeStamped):
     category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.PROTECT)
     subject = models.CharField(max_length=300)
     description = models.TextField(blank=True)
+    # A cached machine translation of `description`, made on the first click of "Translate" and
+    # kept after that; `description_translated_lang` is "en" or "hi", whichever it is in.
+    description_translated = models.TextField(blank=True)
+    description_translated_lang = models.CharField(max_length=2, blank=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="complaints")
     related_to = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.PROTECT, related_name="related_complaints"

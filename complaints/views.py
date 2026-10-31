@@ -48,6 +48,7 @@ from complaints.models import (
 )
 from complaints.services import intake, legacy, llm, logins
 from complaints.services import notifications as notification_service
+from complaints.services import translate as translate_svc
 from complaints.services.analytics import build_dashboard
 from complaints.services.description_summary import (
     extract_complaint_fields,
@@ -1031,6 +1032,22 @@ def document_summary(request: HttpRequest, pk: int) -> HttpResponse:
         "complaints/_document_summary.html",
         {"document": document, "error": error, "offer_anyway": offer_anyway},
     )
+
+
+@login_required
+@require_http_methods(["POST"])
+def complaint_translate(request: HttpRequest, pk: int) -> HttpResponse:
+    """The complaint's summary in the other language, made on the first click and then kept."""
+    complaint = get_object_or_404(perms.visible_complaints(request.user, include_filed=True), pk=pk)
+    if not complaint.description_translated and complaint.description.strip():
+        to = "en" if translate_svc.detect_lang(complaint.description) == "hi" else "hi"
+        text = translate_svc.translate(complaint.description, to)
+        if text:
+            Complaint.objects.filter(pk=complaint.pk).update(
+                description_translated=text, description_translated_lang=to
+            )
+            complaint.description_translated = text
+    return render(request, "complaints/_description_translatable.html", {"complaint": complaint})
 
 
 # ------------------------------------------------------------------- intake

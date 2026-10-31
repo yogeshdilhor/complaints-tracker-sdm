@@ -19,7 +19,7 @@
 
   {# Only what the list card does not already say: the summary, contact details, deadlines. #}
   <section class="overview">
-    <p class="brief">{% if complaint.description %}{{ complaint.description|linebreaksbr }}{% else %}<span class="muted">No summary recorded.</span>{% endif %}</p>
+    {% include "complaints/_description_translatable.html" %}
     <dl class="facts">
       <dt>Complainant</dt><dd class="id-line">{{ complaint.complainant.name }}</dd>
       <dt>Village</dt><dd class="id-line">{% if complaint.village %}{{ complaint.village }}{% else %}<span class="muted">Not recorded</span>{% endif %}</dd>
