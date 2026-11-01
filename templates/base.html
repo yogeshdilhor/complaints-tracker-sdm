@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}SDM Complaint Tracker{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'vendor/pico.min.css' %}">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=1">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=2">
   <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
   <script src="{% static 'js/wheel.js' %}?v=3" defer></script>
   <script src="{% static 'js/mentions.js' %}?v=3" defer></script>
@@ -104,6 +104,9 @@
         var id = e.detail.target && e.detail.target.id;
         if (id === 'detail-pane') { document.body.classList.add('detail-open'); }
         if (id === 'list-pane') { afterList(); }
+        if (id === 'action-area' && e.detail.target.firstElementChild) {
+          e.detail.target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       });
       document.body.addEventListener('htmx:beforeRequest', function (e) {
         var el = e.detail.elt;

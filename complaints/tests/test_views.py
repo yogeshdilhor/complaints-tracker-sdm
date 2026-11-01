@@ -376,6 +376,17 @@ def test_edit_details_through_the_ui(login, clerk, complaint):
     assert Event.objects.filter(complaint=complaint, type=EventType.DETAILS_EDITED).exists()
 
 
+def test_edit_details_button_is_on_the_page_for_a_clerk_but_not_an_officer(
+    login, clerk, officer, awaiting
+):
+    clerk_html = login(clerk).get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
+    assert "Edit details" in clerk_html
+    officer_html = (
+        login(officer).get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
+    )
+    assert "Edit details" not in officer_html
+
+
 def test_full_loop_through_the_ui(login, clerk, reviewer, complaint, tehsildar):
     c = complaint
     steps = [

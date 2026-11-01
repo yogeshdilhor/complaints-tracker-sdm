@@ -25,6 +25,10 @@
   {# Only what the list card does not already say: the summary, contact details, deadlines. #}
   <section class="overview">
     {% include "complaints/_description_translatable.html" %}
+    {% if can_edit_details %}
+    <button type="button" class="edit-link" hx-get="{% url 'complaints:action' complaint.pk 'edit_details' %}" hx-target="#action-area"
+            title="Correct the name, village, phone, address, category, subject, description, portal reference or date">&#9998; Edit details</button>
+    {% endif %}
     <dl class="facts">
       <dt>Complainant</dt><dd class="id-line">{{ complaint.complainant.name }}</dd>
       <dt>Village</dt><dd class="id-line">{% if complaint.village %}{{ complaint.village }}{% else %}<span class="muted">Not recorded</span>{% endif %}</dd>

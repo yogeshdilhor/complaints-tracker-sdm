@@ -222,6 +222,7 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
         "created_login": _pop_created_login(request),
         "actions": actions,
         "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
+        "can_edit_details": perms.can(user, perms.EDIT_DETAILS, complaint),
         "total_age": total_age_days(complaint),
         "open_referral": open_referral,
         "referral_overdue": bool(open_referral and open_referral.due_on < timezone.localdate()),
