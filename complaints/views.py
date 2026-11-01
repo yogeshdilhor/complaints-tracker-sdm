@@ -237,6 +237,20 @@ def complaint_detail(request: HttpRequest, pk: int) -> HttpResponse:
     return render(request, "complaints/detail.html", context)
 
 
+@login_required
+def complaint_focus(request: HttpRequest, pk: int) -> HttpResponse:
+    """The whole complaint, plus its documents side by side: meant for its own window."""
+    complaint = _visible_complaint(request, pk)
+    context = _detail_context(request, complaint, in_focus=True)
+    doc_items = [
+        {"stage_title": stage.title, "document": doc}
+        for stage in context["timeline"]
+        for doc in stage.documents
+    ]
+    context["doc_items"] = doc_items
+    return render(request, "complaints/focus.html", context)
+
+
 # ------------------------------------------------------------------ actions
 
 

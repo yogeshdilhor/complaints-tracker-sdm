@@ -139,6 +139,33 @@ def test_detail_of_hidden_complaint_is_404(login, officer, complaint):
     assert response.status_code == 404
 
 
+def test_detail_page_links_to_the_focus_view(login, clerk, complaint):
+    html = login(clerk).get(reverse("complaints:detail", args=[complaint.pk])).content.decode()
+    assert reverse("complaints:focus", args=[complaint.pk]) in html
+
+
+def test_focus_view_lists_every_document_and_shows_the_first(
+    login, clerk, complaint, make_document
+):
+    first = make_document(complaint, label="first.pdf")
+    second = make_document(complaint, label="second.pdf")
+    html = login(clerk).get(reverse("complaints:focus", args=[complaint.pk])).content.decode()
+    assert "<html" in html  # its own full page, not a pane
+    assert first.original_filename in html and second.original_filename in html
+    assert reverse("complaints:document", args=[first.pk]) in html
+    assert "Focus view" not in html  # no link back into itself
+
+
+def test_focus_view_with_no_documents_says_so(login, clerk, complaint):
+    html = login(clerk).get(reverse("complaints:focus", args=[complaint.pk])).content.decode()
+    assert "No documents on this complaint yet." in html
+
+
+def test_focus_view_of_hidden_complaint_is_404(login, officer, complaint):
+    response = login(officer).get(reverse("complaints:focus", args=[complaint.pk]))
+    assert response.status_code == 404
+
+
 def test_auditor_sees_the_timeline_but_no_action_buttons(login, auditor, awaiting):
     html = login(auditor).get(reverse("complaints:detail", args=[awaiting.pk])).content.decode()
     assert "Timeline" in html and "Marked to Tehsildar for report" in html

@@ -15,6 +15,10 @@
   </div>
   {% endif %}
   <div class="mobile-ref"><span class="ref">{{ complaint.ref_no }}</span> {{ complaint.subject }}</div>
+  {% if not in_focus %}
+  <a class="focus-link" href="{% url 'complaints:focus' complaint.pk %}" target="_blank" rel="noopener"
+     title="Open this complaint with its documents in a separate window">&#10531; Focus view</a>
+  {% endif %}
   <p class="id-banner"><b>{{ complaint.complainant.name }}</b>{% if complaint.village %} &middot; {{ complaint.village }}{% endif %}</p>
 
   {# Only what the list card does not already say: the summary, contact details, deadlines. #}

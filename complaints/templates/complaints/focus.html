@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}{{ complaint.ref_no }} - SDM Complaint Tracker{% endblock %}
+{% block main_class %}workspace{% endblock %}
+{% block content %}
+<div class="split">
+  <div id="detail-pane" class="standalone">
+    {% include "complaints/_detail.html" %}
+  </div>
+  <div id="splitter" role="separator" aria-orientation="vertical" tabindex="0"
+       title="Drag to resize (double-click to reset)"></div>
+  <aside class="focus-docs">
+    {% if doc_items %}
+    <nav class="doc-index" aria-label="Documents">
+      <ol>
+        {% for item in doc_items %}
+        <li>
+          <button type="button" class="doc-nav-item{% if forloop.first %} active{% endif %}"
+                  data-src="{% url 'complaints:document' item.document.pk %}">
+            <span class="doc-nav-stage">{{ item.stage_title }}</span>
+            <span class="doc-nav-file muted">{{ item.document.original_filename }}</span>
+          </button>
+        </li>
+        {% endfor %}
+      </ol>
+    </nav>
+    <div class="doc-frame-wrap">
+      <iframe id="doc-frame" title="Document viewer"
+              src="{% url 'complaints:document' doc_items.0.document.pk %}"></iframe>
+    </div>
+    {% else %}
+    <p class="empty">No documents on this complaint yet.</p>
+    {% endif %}
+  </aside>
+</div>
+<script src="{% static 'js/focus.js' %}" defer></script>
+{% endblock %}

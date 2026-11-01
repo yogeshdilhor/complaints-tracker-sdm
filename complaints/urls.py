@@ -7,6 +7,7 @@ app_name = "complaints"
 urlpatterns = [
     path("", views.complaint_list, name="list"),
     path("c/<int:pk>/", views.complaint_detail, name="detail"),
+    path("c/<int:pk>/focus/", views.complaint_focus, name="focus"),
     path("c/<int:pk>/do/<str:action>/", views.complaint_action, name="action"),
     path("c/<int:pk>/stage-from-document/", views.stage_from_document, name="stage_from_document"),
     path("c/<int:pk>/translate/", views.complaint_translate, name="complaint_translate"),

@@ -124,6 +124,21 @@ body.resizing { cursor: col-resize; user-select: none; }
 #detail-pane > .empty { border: 0; background: none; padding: 3.5rem 1rem; }
 #detail-pane.standalone { overflow: visible; border: 1px solid var(--line); border-radius: var(--radius); }
 .detail .back, .mobile-ref { display: none; }
+
+/* ---------- focus view: complaint + its documents side by side ---------- */
+.focus-docs { min-width: 0; display: flex; flex-direction: column; background: var(--page-bg); }
+.doc-index { overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface); flex: none; }
+.doc-index ol { list-style: none; display: flex; gap: 0; margin: 0; padding: 0; }
+.doc-nav-item { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; padding: .5rem .85rem; border: 0; border-right: 1px solid var(--line); border-bottom: 2px solid transparent; background: none; cursor: pointer; white-space: nowrap; font-size: .78rem; color: var(--ink); }
+.doc-nav-item:hover { background: #f1f5fc; }
+.doc-nav-item.active { border-bottom-color: var(--accent, #2b5ab0); background: #f1f5fc; }
+.doc-nav-stage { font-weight: 600; }
+.doc-nav-file { font-size: .7rem; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.doc-frame-wrap { flex: 1; min-height: 0; }
+#doc-frame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+.focus-docs > .empty { margin: 3.5rem auto; }
+.focus-link { float: right; font-size: .78rem; }
+.split #detail-pane.standalone { overflow-y: auto; border: 0; border-radius: 0; }
 .list-head { display: flex; justify-content: space-between; gap: 1rem; margin: 0 .1rem .4rem; font-size: .74rem; color: var(--muted-ink); }
 .list-head b { color: var(--ink); font-weight: 600; }
 kbd { padding: 0 .35rem; border: 1px solid #cbd2dd; border-bottom-width: 2px; border-radius: .25rem; background: #fff; font-size: .72rem; color: var(--ink); }
