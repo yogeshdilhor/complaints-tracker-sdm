@@ -14,6 +14,7 @@ from django.http import FileResponse, Http404, HttpRequest, HttpResponse, HttpRe
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_http_methods
 
 from complaints import permissions as perms
@@ -950,8 +951,12 @@ def export_download(request: HttpRequest) -> HttpResponse:
 
 
 @login_required
+@xframe_options_sameorigin
 def document_download(request: HttpRequest, pk: int) -> FileResponse:
-    """Files are only ever served here, after a visibility check; there is no public media URL."""
+    """Files are only ever served here, after a visibility check; there is no public media URL.
+
+    Framing is allowed same-origin only, so the Focus view can show it in its own iframe.
+    """
     document = get_object_or_404(Document, pk=pk, is_deleted=False)
     if (
         not perms.visible_complaints(request.user, include_filed=True)

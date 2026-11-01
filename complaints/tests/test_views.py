@@ -415,6 +415,7 @@ def test_document_download_streams_the_file_with_safe_headers(
     assert response["Content-Disposition"].startswith("inline")
     forced = login(clerk).get(reverse("complaints:document", args=[doc.pk]) + "?download=1")
     assert forced["Content-Disposition"].startswith("attachment")
+    assert response["X-Frame-Options"] == "SAMEORIGIN"  # so the Focus view can iframe it
 
 
 def test_documents_are_not_reachable_without_permission(login, officer, complaint, make_document):
