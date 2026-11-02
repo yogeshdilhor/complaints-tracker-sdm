@@ -29,6 +29,7 @@ from complaints.models import (
 from complaints.services import documents as doc_service
 from complaints.services import notifications
 from complaints.services.pendency import sla_days
+from complaints.services.timeline import DELETABLE_STAGE_TYPES, describe_event, event_document_ids
 from core.models import Department, Office
 
 HEADLINE_MAX = 200  # a stage's title on the timeline, when the user writes or picks their own
@@ -609,6 +610,47 @@ def add_stage(
     return _log(complaint, EventType.NOTE_ADDED, actor, at or timezone.now(), payload)
 
 
+def is_stage_deleted(complaint: Complaint, event: Event) -> bool:
+    return complaint.events.filter(
+        type=EventType.STAGE_DELETED, payload__event_id=event.pk
+    ).exists()
+
+
+def delete_stage(complaint: Complaint, actor: Any, event: Event, reason: str) -> Event:
+    """Take a stage off the timeline.
+
+    Events are append-only, so nothing is erased: a STAGE_DELETED event records who removed
+    which stage and why, the timeline hides the stage, and its documents are soft-deleted.
+    """
+    if _blank(reason):
+        raise InvalidTransitionData("A reason for deleting the stage is required.")
+    with transaction.atomic():
+        locked = Complaint.objects.select_for_update().get(pk=complaint.pk)
+        if event.complaint_id != locked.pk:
+            raise InvalidTransitionData("That stage belongs to another complaint.")
+        if event.type not in DELETABLE_STAGE_TYPES:
+            raise InvalidTransition("This stage changed the case and cannot be deleted.")
+        if is_stage_deleted(locked, event):
+            raise InvalidTransition("This stage is already deleted.")
+        title, _, detail = describe_event(event, locked)
+        document_ids = event_document_ids(event)
+        Document.objects.filter(complaint=locked, pk__in=document_ids).update(is_deleted=True)
+        return _log(
+            locked,
+            EventType.STAGE_DELETED,
+            actor,
+            timezone.now(),
+            {
+                "event_id": event.pk,
+                "event_type": event.type,
+                "title": title,
+                "detail": detail,
+                "document_ids": document_ids,
+                "reason": reason.strip(),
+            },
+        )
+
+
 def add_note(complaint: Complaint, actor: Any, text: str, headline: str = "") -> Event:
     if _blank(text):
         raise InvalidTransitionData("Note text is required.")
@@ -623,7 +665,6 @@ EDITABLE_COMPLAINT_FIELDS = (
     "external_ref",
     "received_on",
     "village",
-    "category",
     "subject",
     "description",
 )

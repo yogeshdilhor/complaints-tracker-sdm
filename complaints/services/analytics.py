@@ -83,13 +83,6 @@ def build_dashboard(visible: QuerySet[Complaint], range_key: str = "90") -> dict
         .order_by("-n")[:TOP_N],
         "village__name",
     )
-    by_category = _rows(
-        scoped.exclude(category__isnull=True)
-        .values("category__name")
-        .annotate(n=Count("pk"))
-        .order_by("-n")[:TOP_N],
-        "category__name",
-    )
     by_tag = _rows(
         scoped.exclude(tags__isnull=True)
         .values("tags__name")
@@ -199,7 +192,6 @@ def build_dashboard(visible: QuerySet[Complaint], range_key: str = "90") -> dict
         "by_platform": by_platform,
         "by_department": by_department,
         "by_village": by_village,
-        "by_category": by_category,
         "by_tag": by_tag,
         "weekly": weekly,
         "dept_perf": perf,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -24,6 +23,7 @@ from complaints.forms import (
     AddStageForm,
     AttachDocumentForm,
     ComplaintFilterForm,
+    DeleteStageForm,
     EditDetailsForm,
     ExportForm,
     FileComplaintForm,
@@ -67,7 +67,7 @@ from complaints.services.pendency import (
 )
 from complaints.services.search import filter_complaints, kpi_counts, paginate
 from complaints.services.summary import build_summary
-from complaints.services.timeline import build_timeline, portal_name
+from complaints.services.timeline import build_timeline, describe_event, portal_name
 from complaints.workflow import (
     Action,
     TransitionError,
@@ -75,6 +75,7 @@ from complaints.workflow import (
     add_stage,
     apply_transition,
     attach_document,
+    delete_stage,
     edit_details,
     file_complaint,
     unfile_complaint,
@@ -97,7 +98,7 @@ ACTION_LABELS = {
     perms.ADD_NOTE: "Add note",
     perms.EDIT_DETAILS: "Edit details",
     perms.ADD_STAGE: "Add a stage",
-    perms.FILE: "File this complaint",
+    perms.FILE: "Archive this complaint",
     perms.UNFILE: "Restore this complaint",
 }
 # What the "+" menu on the timeline offers, in plain words.
@@ -114,9 +115,10 @@ MENU_LABELS = {
     Action.REOPEN: "Re-open the complaint",
     perms.ADD_STAGE: "Custom stage: name it yourself",
     perms.EDIT_DETAILS: "Correct complainant details",
-    perms.FILE: "File this complaint (move to Archive)",
+    perms.ATTACH_DOCUMENT: "Add your response (a document)",
+    perms.FILE: "Archive this complaint",
 }
-NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS, perms.FILE)
+NON_STATE_ACTIONS = (perms.ADD_STAGE, perms.EDIT_DETAILS)  # Archive has its own button
 
 
 def _pop_created_login(request: HttpRequest) -> dict | None:
@@ -134,7 +136,7 @@ def _is_htmx(request: HttpRequest) -> bool:
 def _visible_complaint(request: HttpRequest, pk: int) -> Complaint:
     """A case the user may open. Filed ones open too (from the Archive), but only read-only."""
     qs = perms.visible_complaints(request.user, include_filed=True).select_related(
-        "complainant", "village", "category", "current_department", "office"
+        "complainant", "village", "current_department", "office"
     )
     return get_object_or_404(qs, pk=pk)
 
@@ -210,6 +212,8 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
     state_actions = perms.allowed_actions(user, complaint)
     actions = [(a, MENU_LABELS[a]) for a in state_actions]
     actions += [(a, MENU_LABELS[a]) for a in NON_STATE_ACTIONS if perms.can(user, a, complaint)]
+    if _officer_only(user) and perms.can(user, perms.ATTACH_DOCUMENT, complaint):
+        actions.append((perms.ATTACH_DOCUMENT, MENU_LABELS[perms.ATTACH_DOCUMENT]))
     open_referral = complaint.referrals.filter(closed_on__isnull=True).first()
     return {
         "complaint": complaint,
@@ -219,6 +223,8 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
         ),
         "is_officer": _officer_only(user),
         "can_unfile": perms.can(user, perms.UNFILE, complaint),
+        "can_file": perms.can(user, perms.FILE, complaint),
+        "can_delete_stage": perms.can(user, perms.DELETE_STAGE, complaint),
         "created_login": _pop_created_login(request),
         "actions": actions,
         "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
@@ -296,7 +302,9 @@ def _run_action(
     becomes part of this stage, with `doc_summary` (as confirmed by the user) kept on it.
     """
     data = form.cleaned_data
-    wants_login = bool(data.get("create_login")) and action in ACTION_FORMS
+    wants_login = bool(data.get("create_login")) and (
+        action in ACTION_FORMS or action == perms.ADD_STAGE
+    )
     credentials = None
     with transaction.atomic():
         if wants_login:
@@ -331,13 +339,16 @@ def _run_action(
                     officer_office, data.get("officer_name", "")
                 )
         elif action == perms.ATTACH_DOCUMENT:
+            headline = data.get("headline", "")
+            if _officer_only(user):
+                headline = f"Response from {user.department or 'the office'}"
             attach_document(
                 complaint,
                 user,
                 data["file"],
-                data["kind"],
-                supersedes=data["supersedes"],
-                headline=data.get("headline", ""),
+                data.get("kind") or Document.Kind.OTHER,
+                supersedes=data.get("supersedes"),
+                headline=headline,
             )
         elif action == perms.ADD_STAGE:
             documents = [
@@ -346,7 +357,16 @@ def _run_action(
             if staged is not None:
                 staged_doc = store_document(complaint, staged, Document.Kind.OTHER, user)
                 documents.append(staged_doc)
-            _add_custom_stage(complaint, user, data, documents)
+            _add_custom_stage(complaint, user, data | form.transition_data(), documents)
+            if wants_login:
+                complaint.refresh_from_db()
+                if complaint.current_department is None:
+                    raise TransitionError(
+                        "A login can only be made when the case is marked to an officer."
+                    )
+                credentials = logins.create_officer_login(
+                    complaint.current_department, data.get("officer_name", "")
+                )
         elif action == perms.ADD_NOTE:
             add_note(complaint, user, data["text"], headline=data.get("headline", ""))
         elif action == perms.EDIT_DETAILS:
@@ -397,39 +417,22 @@ def _stage_menu(request: HttpRequest, complaint: Complaint, *, with_actions: boo
     return rows
 
 
-def _smart_departments(complaint: Complaint, action: str):
-    """The offices offered when "@" is typed in a custom stage; None for other forms."""
-    if action != perms.ADD_STAGE:
-        return None
-    rows = Department.objects.filter(office=complaint.office, is_active=True)
-    return [{"id": d.pk, "name": d.name, "short": d.short_name or d.name} for d in rows]
-
-
 def _add_custom_stage(complaint: Complaint, user, data: dict, documents: list[Document]) -> None:
-    """A stage the user wrote. If it names an office (typed "@BDPO"), the complaint is marked
-    to that office, with the date picked after "#" as the day the report is expected."""
-    data = data | {"headline": re.sub(r"@(?=\S)", "", data["headline"])}  # "@ZCRIM" reads "ZCRIM"
-    department = data.get("mark_department")
-    new_name = (data.get("mark_new_department") or "").strip()
-    if department is None and new_name:
-        department, _ = Department.objects.get_or_create(
-            office=complaint.office,
-            name=new_name[:200],
-            defaults={"short_name": new_name[:50], "kind": Department.Kind.EXTERNAL_DEPARTMENT},
-        )
+    """A stage the user wrote. If they marked it to a department or officer, the complaint is
+    marked there too, with the date by which the reply is wanted."""
+    department = data.get("department")
     state = complaint.current_state
-    due_on = data.get("expected_by")
     if department is not None and state in (State.RECEIVED, State.AWAITING_REPORT):
         action = Action.ISSUE_NOTICE if state == State.RECEIVED else Action.REISSUE_NOTICE
         if perms.can(user, action, complaint):
-            extra: dict[str, Any] = {"outcome": Referral.Outcome.SUPERSEDED}
-            if state == State.AWAITING_REPORT and department == complaint.current_department:
-                extra = {"outcome": Referral.Outcome.NO_RESPONSE}  # a reminder to the same office
             fields: dict[str, Any] = {"department": department}
-            if due_on:
-                fields["due_on"] = due_on
+            if data.get("due_on"):
+                fields["due_on"] = data["due_on"]
             if state == State.AWAITING_REPORT:
-                fields |= extra
+                same = department == complaint.current_department  # a reminder to the same office
+                fields["outcome"] = (
+                    Referral.Outcome.NO_RESPONSE if same else Referral.Outcome.SUPERSEDED
+                )
             apply_transition(
                 complaint,
                 action,
@@ -465,6 +468,11 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         form.fields["file"].required = True
         form.fields["file"].label = "Your report (PDF/JPG/PNG)"
         del form.fields["received_on"]
+    if action == perms.ATTACH_DOCUMENT and _officer_only(request.user):
+        # A subordinate office adds its response and nothing more.
+        for name in ("kind", "supersedes", "headline"):
+            del form.fields[name]
+        form.fields["file"].label = "Your response (PDF/JPG/PNG)"
     error = None
     if request.method == "POST" and request.POST.get("staged") and staged is None:
         error = "The uploaded document has expired. Please upload it again."
@@ -520,7 +528,6 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
         "label": ACTION_LABELS[action],
         "error": error,
         "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
-        "smart_departments": _smart_departments(complaint, action),
         "stage_menu": _stage_menu(request, complaint, with_actions=action == perms.ADD_STAGE),
     }
     if request.POST.get("staged"):
@@ -528,6 +535,37 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
             request, complaint, action, request.POST["staged"], request.POST.get("doc_summary", "")
         )
     return render(request, "complaints/_action_form.html", context)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def stage_delete(request: HttpRequest, pk: int, event_id: int) -> HttpResponse:
+    """Delete a stage (SDM only), after a warning that it may amount to tampering."""
+    complaint = _visible_complaint(request, pk)
+    if not perms.can(request.user, perms.DELETE_STAGE, complaint):
+        return HttpResponseForbidden("Only the SDM can delete a stage.")
+    event = get_object_or_404(complaint.events, pk=event_id)
+    title, _, _ = describe_event(event, complaint)
+    form = DeleteStageForm(request.POST or None)
+    error = None
+    if request.method == "POST" and form.is_valid():
+        try:
+            delete_stage(complaint, request.user, event, form.cleaned_data["reason"])
+        except TransitionError as exc:
+            error = str(exc)
+        else:
+            if not _is_htmx(request):
+                return redirect("complaints:detail", pk=pk)
+            complaint = _visible_complaint(request, pk)
+            response = render(
+                request, "complaints/_detail.html", _detail_context(request, complaint)
+            )
+            response["HX-Trigger"] = "complaintChanged"
+            response["HX-Retarget"] = "#detail-pane"
+            response["HX-Reswap"] = "innerHTML"
+            return response
+    context = {"complaint": complaint, "event": event, "title": title, "form": form, "error": error}
+    return render(request, "complaints/_delete_stage.html", context)
 
 
 # -------------------------------------------- stage from an uploaded document
@@ -613,6 +651,7 @@ def _stage_initial(action: str, ai: dict[str, str], office) -> dict[str, Any]:
         initial["reason"] = reason or note
     elif action == perms.ADD_STAGE:
         initial["note"] = note
+        initial |= {"department": department.pk} if department else {}
     return initial
 
 
@@ -707,7 +746,6 @@ def stage_from_document(request: HttpRequest, pk: int) -> HttpResponse:
         "multipart": any(f.widget.needs_multipart_form for f in form.fields.values()),
         "unread": not ai and (meta.get("typed") is False or not meta.get("extracted_text")),
         "ai_used": bool(ai),
-        "smart_departments": _smart_departments(complaint, chosen),
         "stage_menu": _stage_menu(request, complaint, with_actions=False),
     } | _staged_context(request, complaint, chosen, meta["sha"], ai.get("summary", ""))
     return render(request, "complaints/_action_form.html", context)
@@ -891,7 +929,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     data = build_dashboard(perms.visible_complaints(request.user), request.GET.get("range", "90"))
     chart_keys = (
         "weekly", "by_state", "by_platform", "by_department", "by_village",
-        "by_category", "by_tag", "ageing", "dept_speed", "atr",
+        "by_tag", "ageing", "dept_speed", "atr",
     )  # fmt: skip
     return render(
         request,
@@ -1225,7 +1263,7 @@ def legacy_status(request: HttpRequest, pk: int) -> HttpResponse:
 def overdue_today(request: HttpRequest) -> HttpResponse:
     today = timezone.localdate()
     visible = perms.visible_complaints(request.user).select_related(
-        "complainant", "village", "current_department", "category"
+        "complainant", "village", "current_department"
     )
 
     late = (

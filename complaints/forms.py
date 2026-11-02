@@ -15,7 +15,7 @@ from complaints.services.search import BUCKET_CHOICES
 from complaints.services.timeline import portal_name
 from complaints.widgets import GroupedAddSelect, VillageWidget, WheelWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
-from core.models import Category, ConcernedDepartment, Department, Office, Village
+from core.models import ConcernedDepartment, Department, Office, Village
 
 _DATE = forms.DateInput(attrs={"type": "date"})
 
@@ -147,7 +147,6 @@ class ComplaintFilterForm(forms.Form):
     village = forms.ModelChoiceField(queryset=Village.objects.none(), required=False)
     platform = forms.ChoiceField(choices=[("", "All platforms"), *Platform.choices], required=False)
     status = forms.ChoiceField(choices=[("", "All statuses"), *State.choices], required=False)
-    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
     tag = forms.ModelChoiceField(queryset=Tag.objects.none(), required=False)
     date_from = forms.DateField(required=False, widget=_DATE, label="From")
     date_to = forms.DateField(required=False, widget=_DATE, label="To")
@@ -160,11 +159,9 @@ class ComplaintFilterForm(forms.Form):
         if office is not None:
             self.fields["department"].queryset = Department.objects.filter(office=office)
             self.fields["village"].queryset = Village.objects.filter(office=office)
-            self.fields["category"].queryset = Category.objects.filter(office=office)
             self.fields["tag"].queryset = Tag.objects.filter(office=office)
         self.fields["department"].empty_label = "All departments"
         self.fields["village"].empty_label = "All villages"
-        self.fields["category"].empty_label = "All categories"
         self.fields["tag"].empty_label = "All tags"
         self.fields["q"].widget.attrs.update(
             {"placeholder": "Search ref no, phone, name, village, text...", "autocomplete": "off"}
@@ -450,13 +447,21 @@ class FileComplaintForm(forms.Form):
 
     reason = forms.CharField(
         widget=forms.Textarea(attrs={"rows": 3}),
-        label="Why is this complaint being filed?",
-        help_text="It leaves the normal views and goes to the Archive. It can be restored later.",
+        label="Why is this complaint being archived?",
+        help_text="It leaves the normal views for the Archive. Only the SDM can restore it.",
     )
 
     def __init__(self, *args, complaint: Complaint, **kwargs):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
+
+
+class DeleteStageForm(forms.Form):
+    """Deleting a stage is confirmed with a reason, which stays on the record."""
+
+    reason = forms.CharField(
+        widget=forms.Textarea(attrs={"rows": 2}), label="Why is this stage being deleted?"
+    )
 
 
 class UnfileForm(forms.Form):
@@ -469,35 +474,56 @@ class UnfileForm(forms.Form):
         self.complaint = complaint
 
 
-class AddStageForm(forms.Form):
-    """A stage you write in one line, with any number of documents."""
+class AddStageForm(ActionForm):
+    """A stage you name yourself: optionally marked to a department or officer (picked exactly
+    as on the other forms), with your own comments, a date by which the reply is wanted, and
+    any number of documents."""
 
-    files = MultiAttachmentField(required=False, label="Documents for this stage (any number)")
-    # Filled in by static/js/mentions.js when "@office" or "by <date>" is typed.
-    mark_department = forms.ModelChoiceField(
-        queryset=Department.objects.none(), required=False, widget=forms.HiddenInput
+    transition_fields = ("department", "due_on")
+    department = _department_field(False, "Mark to (department / officer)")
+    note = forms.CharField(
+        required=False, widget=forms.Textarea(attrs={"rows": 3}), label="Your comments"
     )
-    mark_new_department = forms.CharField(required=False, max_length=200, widget=forms.HiddenInput)
-    expected_by = forms.DateField(required=False, widget=forms.HiddenInput)
+    due_on = forms.DateField(
+        required=False,
+        widget=_DATE,
+        label="Reply needed by",
+        help_text="Only used when the complaint is marked to someone. Blank = set from SLA.",
+    )
 
     def __init__(self, *args, complaint: Complaint, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.complaint = complaint
-        self.fields["mark_department"].queryset = _active_departments(complaint.office)
+        super().__init__(*args, complaint=complaint, **kwargs)
         headline = _headline_field(complaint, None)
         headline.required = True
         headline.label = "Name this stage"
         headline.widget.attrs["placeholder"] = (
-            "Type $ for stage types, @ for an office, # for a date"
+            "Type $ for the usual stage titles, or write your own"
         )
         self.fields["headline"] = headline
-        self.order_fields(["headline"])
+        self.order_fields(["headline", "department", "due_on", "note", "files"])
 
     def clean_headline(self) -> str:
         value = (self.cleaned_data.get("headline") or "").strip()
         if not value:
             raise ValidationError("Give the stage a title.")
         return value
+
+    def clean_due_on(self) -> date | None:
+        value = self.cleaned_data.get("due_on")
+        if value and value < timezone.localdate():
+            raise ValidationError("The reply date cannot be in the past.")
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        marked = cleaned.get("department") or self._new_department
+        if marked and self.complaint.current_state not in (State.RECEIVED, State.AWAITING_REPORT):
+            self.add_error(
+                "department",
+                f"This complaint is {self.complaint.get_current_state_display().lower()}, so it "
+                "cannot be marked to an officer here. Use the review or portal steps instead.",
+            )
+        return cleaned
 
 
 class AttachDocumentForm(forms.Form):
@@ -524,7 +550,6 @@ class EditDetailsForm(forms.Form):
     external_ref = forms.CharField(max_length=100, required=False)
     received_on = forms.DateField(widget=_DATE)
     village = forms.ModelChoiceField(queryset=Village.objects.none(), required=False)
-    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
     subject = forms.CharField(max_length=300)
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 4}))
 
@@ -535,7 +560,6 @@ class EditDetailsForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
         self.fields["village"].queryset = Village.objects.filter(office=complaint.office)
-        self.fields["category"].queryset = Category.objects.filter(office=complaint.office)
         if not self.is_bound:
             c = complaint
             self.initial = {
@@ -546,7 +570,6 @@ class EditDetailsForm(forms.Form):
                 "external_ref": c.external_ref,
                 "received_on": c.received_on,
                 "village": c.village_id,
-                "category": c.category_id,
                 "subject": c.subject,
                 "description": c.description,
             }
@@ -624,7 +647,6 @@ class LegacyConfirmForm(DepartmentPickerMixin, forms.Form):
     source_platform = forms.ChoiceField(choices=Platform.choices, label="Platform")
     external_ref = forms.CharField(max_length=100, required=False, label="External reference")
     received_on = forms.DateField(widget=_DATE, label="Complaint received on")
-    category = forms.ModelChoiceField(queryset=Category.objects.none(), required=False)
     tags = forms.ModelMultipleChoiceField(queryset=Tag.objects.none(), required=False)
     new_tag = forms.CharField(max_length=50, required=False, label="New tag")
     concerned_department = forms.ModelChoiceField(
@@ -650,7 +672,6 @@ class LegacyConfirmForm(DepartmentPickerMixin, forms.Form):
         villages = Village.objects.filter(office=office, is_active=True)
         self.fields["village"].queryset = villages
         self.fields["village"].widget = VillageWidget(villages)
-        self.fields["category"].queryset = Category.objects.filter(office=office)
         self.fields["tags"].queryset = Tag.objects.filter(office=office)
         self.fields["related_to"].queryset = Complaint.objects.filter(office=office)
         self.fields["related_to"].widget = forms.HiddenInput()

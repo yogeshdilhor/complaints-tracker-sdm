@@ -27,7 +27,11 @@
     {% include "complaints/_description_translatable.html" %}
     {% if can_edit_details %}
     <button type="button" class="edit-link" hx-get="{% url 'complaints:action' complaint.pk 'edit_details' %}" hx-target="#action-area"
-            title="Correct the name, village, phone, address, category, subject, description, portal reference or date">&#9998; Edit details</button>
+            title="Correct the name, village, phone, address, subject, description, portal reference or date">&#9998; Edit details</button>
+    {% endif %}
+    {% if can_file %}
+    <button type="button" class="edit-link archive-link" hx-get="{% url 'complaints:action' complaint.pk 'file_complaint' %}" hx-target="#action-area"
+            title="Move this complaint to the Archive">&#128451; Archive</button>
     {% endif %}
     <dl class="facts">
       <dt>Complainant</dt><dd class="id-line">{{ complaint.complainant.name }}</dd>
@@ -35,7 +39,6 @@
       {% if complaint.complainant.phone %}<dt>Phone</dt><dd><a href="tel:{{ complaint.complainant.phone }}">{{ complaint.complainant.phone }}</a></dd>{% endif %}
       {% if complaint.complainant.address %}<dt>Address</dt><dd>{{ complaint.complainant.address }}</dd>{% endif %}
       {% if complaint.external_ref %}<dt>Portal / ref no.</dt><dd>{{ complaint.external_ref }}</dd>{% endif %}
-      {% if complaint.category %}<dt>Category</dt><dd>{{ complaint.category }}</dd>{% endif %}
       {% if complaint.tags.all %}<dt>Tags</dt><dd>{% for t in complaint.tags.all %}<span class="tag">{{ t }}</span> {% endfor %}</dd>{% endif %}
       {% if complaint.related_to %}<dt>Related to</dt><dd><a href="{% url 'complaints:detail' complaint.related_to_id %}">{{ complaint.related_to.ref_no }}</a></dd>{% endif %}
       {% if open_referral %}<dt>Reply due</dt><dd{% if referral_overdue %} class="error"{% endif %}>{{ open_referral.due_on|date:"j M Y" }}{% if referral_overdue %} &middot; overdue{% endif %}</dd>{% endif %}
@@ -61,7 +64,7 @@
     </details>
     {% elif actions %}
     <details class="add-menu">
-      <summary class="add-btn" title="Add a stage to the timeline"><span aria-hidden="true">+</span> {% if is_officer %}Upload your report{% else %}Add stage{% endif %}</summary>
+      <summary class="add-btn" title="Add a stage to the timeline"><span aria-hidden="true">+</span> {% if is_officer %}Add your response{% else %}Add stage{% endif %}</summary>
       <ul>
         {% for name, label in actions %}
         <li><button type="button" hx-get="{% url 'complaints:action' complaint.pk name %}" hx-target="#action-area"
@@ -83,6 +86,7 @@
           {% if st.documents %}<span class="clip" title="{{ st.documents|length }} document(s)">&#128206; {{ st.documents|length }}</span>{% endif %}
           <small class="stage-meta">{{ st.at|local_date }}{% if st.actor %} &middot; {{ st.actor.get_full_name|default:st.actor.username }}{% endif %}</small>
         </summary>
+        {% if can_delete_stage and st.deletable %}<button type="button" class="linklike danger stage-delete" hx-get="{% url 'complaints:stage_delete' complaint.pk st.event_id %}" hx-target="#action-area">Delete this stage</button>{% endif %}
         <div class="stage-body">
           {% if st.detail %}<p class="stage-detail">{{ st.detail|linebreaksbr }}</p>{% endif %}
           {% for d in st.documents %}
@@ -112,6 +116,7 @@
       <div class="stage-flat">
         <span class="stage-title">{{ st.title }}</span>
         <small class="stage-meta">{{ st.at|local_date }}{% if st.actor %} &middot; {{ st.actor.get_full_name|default:st.actor.username }}{% endif %}</small>
+        {% if can_delete_stage and st.deletable %}<button type="button" class="linklike danger stage-delete" hx-get="{% url 'complaints:stage_delete' complaint.pk st.event_id %}" hx-target="#action-area">Delete</button>{% endif %}
       </div>
       {% endif %}
     </li>

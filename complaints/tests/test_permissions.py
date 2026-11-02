@@ -107,7 +107,8 @@ def test_permission_matrix(request, role, allowed, complaint):
 
 def test_officer_can_only_add_a_report_on_a_case_marked_to_them(officer, with_tehsildar, with_bdpo):
     for action in [*STATE_ACTIONS, *NON_STATE]:
-        expected = action == Action.RECORD_REPORT
+        # ...or add a document (their response); nothing else.
+        expected = action in (Action.RECORD_REPORT, perms.ATTACH_DOCUMENT)
         assert perms.can(officer, action, with_tehsildar) == expected, action
         assert not perms.can(officer, action, with_bdpo), action
 

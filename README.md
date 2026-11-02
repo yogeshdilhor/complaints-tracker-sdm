@@ -42,7 +42,7 @@ Size it is built for: about 100 complaints a week, one office, 10-20 users. It i
 - **Dashboard.** Office-wide analytics: weekly intake, status, departments, portals, ageing, department turnaround, ATR outcomes, villages, categories and tags. Charts are drawn by Chart.js (vendored in `static/vendor`, no CDN).
 - **Table download.** An Excel workbook (Complaints, Reports, Timeline, Documents sheets), filterable by department, portal and status. Written by `complaints/services/xlsx.py`, no extra package.
 - **Filing and the Archive.** The admin (the SDM) alone can *file* a complaint (a reason is required): it disappears from the list, dashboard and overdue page and is kept in the **Archive**, searchable and downloadable as Excel. Only the admin can restore it. Staff can open a filed case read-only; department officers never see it.
-- **Staff logins.** `python manage.py create_login --username sdm --role Admin --admin-site` makes the SDM login; `--username complaintsbranch --role Reviewer` makes the complaints-branch login, which can do everything except file or restore. The password is printed once; each user can change it from *Change password* at the top right.
+- **Staff logins.** `python manage.py create_login --username sdm --role Admin --admin-site` makes the SDM login; `--username complaintsbranch --role Reviewer` makes the complaints-branch login, which can do everything except restore an archived complaint or delete a stage. The password is printed once; each user can change it from *Change password* at the top right.
 - **Resizable panes.** Drag the divider between the list and the case; the width is remembered in the browser (double-click to reset).
 
 Dashboard and Table download are for Clerk, Reviewer, Admin and Auditor; department officers see neither.
@@ -73,9 +73,9 @@ Each role is a Django group created by a migration.
 | Role | Can do |
 | --- | --- |
 | Clerk | Register, edit, add notes and files, issue and reissue notices, record reports, submit to the portal, record portal accepted or rejected |
-| DepartmentOfficer | A view-only login for one office or department, made by the SDM (Reviewer or Admin) when marking a complaint, or on the Officer logins page. Sees every complaint ever marked to their office, but only the stages and documents that concern it. The one thing they can do is upload their report while a case is waiting for it. Logins expire after 30 days |
-| Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen |
-| Admin | Everything a Reviewer can, plus master data and users in the Django admin (`/admin/`; the user needs "staff status") |
+| DepartmentOfficer | A view-only login for one office or department, made by the SDM (Reviewer or Admin) when marking a complaint, or on the Officer logins page. Sees every complaint ever marked to their office, but only the stages and documents that concern it. They can upload their report while a case is waiting for it, and add a document (their response) to any of their cases; nothing else. Logins expire after 30 days |
+| Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen, archive a complaint |
+| Admin | Everything a Reviewer can, plus restoring archived complaints, deleting a stage (note or document stages only; logged as a STAGE_DELETED event, never erased), plus master data and users in the Django admin (`/admin/`; the user needs "staff status") |
 | Auditor | Read-only |
 
 Django's superuser flag grants nothing inside the app; roles do. Case tables (complaints, referrals, documents, events) are read-only even in the Django admin.

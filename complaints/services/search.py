@@ -77,7 +77,6 @@ def filter_complaints(
         "village": "village",
         "platform": "source_platform",
         "status": "current_state",
-        "category": "category",
     }
     for key, field in exact.items():
         value = filters.get(key)

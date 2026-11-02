@@ -140,6 +140,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .focus-link { float: right; font-size: .78rem; }
 .edit-link { display: inline-block; width: auto; margin: 0 0 .5rem; padding: .15rem .6rem; font-size: .78rem; font-weight: 400; background: var(--surface); color: var(--accent, #2b5ab0); border: 1px solid var(--line-2); border-radius: 999px; cursor: pointer; }
 .edit-link:hover { background: #f1f5fc; }
+.archive-link { margin-left: .4rem; color: #8a3b12; }
+.archive-link:hover { background: #fdf3ec; }
 .split #detail-pane.standalone { overflow-y: auto; border: 0; border-radius: 0; }
 .list-head { display: flex; justify-content: space-between; gap: 1rem; margin: 0 .1rem .4rem; font-size: .74rem; color: var(--muted-ink); }
 .list-head b { color: var(--ink); font-weight: 600; }

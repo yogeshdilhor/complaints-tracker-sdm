@@ -1,8 +1,9 @@
-"""Typing "@office" and "by <date>" in a custom stage marks the complaint and sets the due date."""
+"""Adding a stage: marking it to a department or officer, with comments and a reply-by date."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from django.urls import reverse
+from django.utils import timezone
 
 from complaints.models import Department, State
 from complaints.workflow import Action, apply_transition
@@ -11,55 +12,48 @@ HX = {"HTTP_HX_REQUEST": "true"}
 
 
 def post_stage(client, complaint, **fields):
-    data = {"headline": "", "headline_own": "", "note": ""} | fields
+    data = {"headline": "A stage", "note": ""} | fields
     return client.post(reverse("complaints:action", args=[complaint.pk, "add_stage"]), data, **HX)
 
 
-def test_the_form_offers_the_offices_for_at_mentions(client, clerk, make_complaint, tehsildar):
-    client.force_login(clerk)
-    c = make_complaint()
-    html = client.get(reverse("complaints:action", args=[c.pk, "add_stage"]), **HX).content.decode()
-    assert "data-smart" in html and "smart-departments-data" in html
-    assert tehsildar.name in html and 'name="mark_department"' in html
-    assert 'name="expected_by"' in html
-
-
-def test_other_forms_have_no_smart_typing(client, clerk, make_complaint):
-    client.force_login(clerk)
-    c = make_complaint()
-    html = client.get(reverse("complaints:action", args=[c.pk, "add_note"]), **HX).content.decode()
-    assert "smart-departments-data" not in html and 'name="mark_department"' not in html
-
-
-def test_an_at_mention_marks_a_new_complaint_with_the_due_date(
+def test_the_form_has_department_comments_and_a_reply_date(
     client, clerk, make_complaint, tehsildar
 ):
     client.force_login(clerk)
     c = make_complaint()
+    html = client.get(reverse("complaints:action", args=[c.pk, "add_stage"]), **HX).content.decode()
+    assert tehsildar.name in html
+    for name in ("department", "note", "due_on", "files", "headline"):
+        assert f'name="{name}"' in html, name
+    assert "smart-departments-data" not in html  # the @ and # typing tricks are gone
+
+
+def test_marking_a_new_complaint_sets_the_officer_and_due_date(
+    client, clerk, make_complaint, tehsildar
+):
+    client.force_login(clerk)
+    c = make_complaint()
+    due = timezone.localdate() + timedelta(days=9)
     post_stage(
         client,
         c,
-        headline="Report expected from Tehsildar by 25 Oct 2026",
-        mark_department=tehsildar.pk,
-        expected_by="2026-10-25",
+        headline="Report sought from Tehsildar",
+        department=tehsildar.pk,
+        due_on=due.isoformat(),
+        note="Please check the khasra numbers.",
     )
     c.refresh_from_db()
     assert c.current_state == State.AWAITING_REPORT and c.current_department == tehsildar
     referral = c.referrals.get()
-    assert referral.due_on == date(2026, 10, 25)
+    assert referral.due_on == due
     titles = [e.payload.get("headline") for e in c.events.all() if e.payload.get("headline")]
-    assert "Report expected from Tehsildar by 25 Oct 2026" in titles
+    assert "Report sought from Tehsildar" in titles
 
 
 def test_a_new_office_can_be_typed(client, clerk, make_complaint, office):
     client.force_login(clerk)
     c = make_complaint()
-    post_stage(
-        client,
-        c,
-        headline="Report sought from Fire Officer",
-        mark_new_department="Fire Officer",
-    )
+    post_stage(client, c, headline="Report sought from Fire Officer", department_own="Fire Officer")
     c.refresh_from_db()
     created = Department.objects.get(office=office, name="Fire Officer")
     assert c.current_department == created and c.current_state == State.AWAITING_REPORT
@@ -71,27 +65,36 @@ def test_marking_again_while_waiting_moves_it_to_the_new_office(
     client.force_login(clerk)
     c = make_complaint()
     apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar)
-    post_stage(client, c, headline="Now with BDPO", mark_department=bdpo.pk)
+    post_stage(client, c, headline="Now with BDPO", department=bdpo.pk)
     c.refresh_from_db()
     assert c.current_department == bdpo and c.current_state == State.AWAITING_REPORT
 
 
-def test_without_a_mention_it_is_a_plain_stage(client, clerk, make_complaint):
+def test_without_a_department_it_is_a_plain_stage(client, clerk, make_complaint):
     client.force_login(clerk)
     c = make_complaint()
-    post_stage(client, c, headline="Phoned the complainant")
+    post_stage(client, c, headline="Phoned the complainant", note="No answer")
     c.refresh_from_db()
     assert c.current_state == State.RECEIVED and c.current_department is None
+    note = c.events.filter(payload__headline="Phoned the complainant").get()
+    assert note.payload["note"] == "No answer"
 
 
-def test_the_at_sign_is_dropped_from_the_saved_title(client, clerk, make_complaint, office):
+def test_the_reply_date_cannot_be_in_the_past(client, clerk, make_complaint, tehsildar):
     client.force_login(clerk)
     c = make_complaint()
-    post_stage(
-        client,
-        c,
-        headline="Report received @ZCRIM to answer",
-        mark_new_department="ZCRIM",
-    )
-    titles = [e.payload.get("headline") for e in c.events.all() if e.payload.get("headline")]
-    assert "Report received ZCRIM to answer" in titles
+    html = post_stage(
+        client, c, department=tehsildar.pk, due_on=date(2020, 1, 1).isoformat()
+    ).content.decode()
+    assert "cannot be in the past" in html
+    c.refresh_from_db()
+    assert c.current_state == State.RECEIVED
+
+
+def test_a_case_under_review_cannot_be_marked_from_here(client, clerk, make_complaint, tehsildar):
+    client.force_login(clerk)
+    c = make_complaint()
+    apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar)
+    apply_transition(c, Action.RECORD_REPORT, clerk)
+    html = post_stage(client, c, department=tehsildar.pk).content.decode()
+    assert "cannot be marked to an officer here" in html

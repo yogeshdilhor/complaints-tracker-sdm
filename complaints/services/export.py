@@ -26,7 +26,7 @@ def export_queryset(
     `visible` must include filed complaints; `archive` picks active (""), filed ("only") or
     both ("both").
     """
-    qs = visible.select_related("complainant", "village", "category", "current_department")
+    qs = visible.select_related("complainant", "village", "current_department")
     if archive == "only":
         qs = qs.filter(filed_at__isnull=False)
     elif archive != "both":
@@ -105,7 +105,6 @@ def build_workbook(complaints: QuerySet[Complaint]) -> bytes:
                 c.complainant.phone,
                 c.complainant.address,
                 str(c.village) if c.village else "",
-                str(c.category) if c.category else "",
                 ", ".join(t.name for t in c.tags.all()),
                 c.subject,
                 c.description,
@@ -151,7 +150,6 @@ def build_workbook(complaints: QuerySet[Complaint]) -> bytes:
                     "Phone",
                     "Address",
                     "Village",
-                    "Category",
                     "Tags",
                     "Subject",
                     "Complaint summary",

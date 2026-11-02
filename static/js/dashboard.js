@@ -74,6 +74,5 @@
   bars('dept_speed', data.dept_speed, { horizontal: true, colors: '#2f8f83' });
   donut('atr', data.atr);
   bars('by_village', data.by_village, { horizontal: true });
-  bars('by_category', data.by_category, { horizontal: true, colors: '#7a62b8' });
   bars('by_tag', data.by_tag, { horizontal: true, colors: '#d9962b' });
 })();

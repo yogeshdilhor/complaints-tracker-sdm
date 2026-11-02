@@ -15,7 +15,8 @@ ADD_NOTE = "add_note"
 EDIT_DETAILS = "edit_details"
 ADD_STAGE = "add_stage"  # a stage the user names themselves, with any documents
 MANAGE_LOGINS = "manage_logins"  # create, renew and switch off officer logins
-FILE = "file_complaint"  # move a complaint to the Archive: the admin (SDM) only
+FILE = "file_complaint"  # move a complaint to the Archive: the SDM (Admin) and Reviewer
+DELETE_STAGE = "delete_stage"  # take a note or document stage off the timeline: the SDM only
 UNFILE = "unfile_complaint"  # bring it back: the admin (SDM) only
 
 _CLERK_ACTIONS = {
@@ -37,8 +38,9 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
     Action.CLOSE_WITHOUT_PORTAL,
     Action.REOPEN,
 }
-_REVIEWER_ACTIONS |= {MANAGE_LOGINS}
-_ADMIN_ACTIONS = _REVIEWER_ACTIONS | {FILE, UNFILE}  # ...and alone may file and restore
+_REVIEWER_ACTIONS |= {MANAGE_LOGINS, FILE}  # the SDM and the steno may both archive
+# ...but only the SDM may bring one back, or delete a stage
+_ADMIN_ACTIONS = _REVIEWER_ACTIONS | {UNFILE, DELETE_STAGE}
 
 
 _OFFICE_WIDE = {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}
@@ -106,6 +108,8 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
             and complaint.current_department_id == user.department_id
         ):
             allowed.add(Action.RECORD_REPORT)
+        # ...or add a document (their response) to any case marked to them, at any time.
+        allowed.add(ATTACH_DOCUMENT)
     return action in allowed
 
 
@@ -116,7 +120,8 @@ def allowed_actions(user, complaint: Complaint) -> list[str]:
 
 def officer_can_see_document(user, document) -> bool:
     """Officers may open only the documents on the stages they can see: the complaint itself,
-    notices to them, and their own reports. Everyone else with access to the case sees all."""
+    notices to them, their own reports and the documents they added themselves. Everyone else
+    with access to the case sees all."""
     if Role.DEPARTMENT_OFFICER not in _roles(user) or _roles(user) & _OFFICE_WIDE:
         return True
     from complaints.services.timeline import build_timeline

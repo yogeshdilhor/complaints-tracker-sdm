@@ -16,6 +16,9 @@ from complaints.models import (
     Referral,
 )
 
+# Stages that only carry words and documents; the only ones that may be deleted.
+DELETABLE_STAGE_TYPES = (EventType.NOTE_ADDED, EventType.DOCUMENT_ATTACHED)
+
 # Payload keys that point at a document, per event type.
 _DOCUMENT_KEYS = ("document_id", "notice_document_id")
 
@@ -28,6 +31,8 @@ class Stage:
     tone: str = "info"  # info, ok, warn, bad: the colour of the dot
     detail: str = ""
     documents: list[Document] = field(default_factory=list)
+    event_id: int | None = None
+    deletable: bool = False  # may the SDM take it off the timeline?
 
     @property
     def has_body(self) -> bool:
@@ -41,7 +46,7 @@ def portal_name(complaint: Complaint) -> str:
     return f"{complaint.get_source_platform_display()} portal"
 
 
-def _document_ids(event: Event) -> list[int]:
+def event_document_ids(event: Event) -> list[int]:
     p = event.payload
     ids = [p.get(key) for key in _DOCUMENT_KEYS]
     ids.append((p.get("new_referral") or {}).get("notice_document_id"))
@@ -105,6 +110,9 @@ def _default_description(event: Event, complaint: Complaint) -> tuple[str, str, 
             return f"Document added ({kind})", "info", ""
         case EventType.NOTE_ADDED:
             return "Note added", "info", p.get("note", "")
+        case EventType.STAGE_DELETED:
+            said = f"Reason: {p.get('reason', '')}"
+            return f"Stage deleted: {p.get('title', '')}", "bad", said
         case EventType.DETAILS_EDITED:
             changes = "; ".join(
                 f"{name}: {v['old'] or '-'} -> {v['new'] or '-'}"
@@ -126,13 +134,16 @@ def _stages_for_department(complaint: Complaint, department) -> set[int]:
         InquiryReport.objects.filter(referral_id__in=referrals).values_list("pk", flat=True)
     )
     allowed: set[int] = set()
-    for event in complaint.events.all():
+    for event in complaint.events.select_related("actor"):
         p = event.payload
         match event.type:
             case EventType.COMPLAINT_REGISTERED:
                 allowed.add(event.pk)
             case EventType.NOTICE_ISSUED | EventType.REPORT_RECEIVED:
                 if p.get("referral_id") in referrals:
+                    allowed.add(event.pk)
+            case EventType.DOCUMENT_ATTACHED:
+                if event.actor.department_id == department.pk:  # the office's own response
                     allowed.add(event.pk)
             case EventType.REVIEW_SATISFIED:
                 if p.get("report_id") in reports:
@@ -152,6 +163,8 @@ def build_timeline(complaint: Complaint, department=None) -> list[Stage]:
     With `department`, only the stages that concern that department (for an officer's login).
     """
     visible_events = _stages_for_department(complaint, department) if department else None
+    events = list(complaint.events.select_related("actor"))
+    deleted = {e.payload.get("event_id") for e in events if e.type == EventType.STAGE_DELETED}
     documents = {
         d.pk: d
         for d in complaint.documents.filter(is_deleted=False)
@@ -159,12 +172,25 @@ def build_timeline(complaint: Complaint, department=None) -> list[Stage]:
         .prefetch_related("superseded_by")
     }
     stages: list[Stage] = []
-    for event in complaint.events.select_related("actor"):
+    for event in events:
+        if event.pk in deleted:
+            continue
         if visible_events is not None and event.pk not in visible_events:
             continue
         title, tone, detail = describe_event(event, complaint)
-        attached = [documents.pop(i) for i in _document_ids(event) if i in documents]
-        stages.append(Stage(title, event.occurred_at, event.actor, tone, detail, attached))
+        attached = [documents.pop(i) for i in event_document_ids(event) if i in documents]
+        stages.append(
+            Stage(
+                title,
+                event.occurred_at,
+                event.actor,
+                tone,
+                detail,
+                attached,
+                event_id=event.pk,
+                deletable=event.type in DELETABLE_STAGE_TYPES,
+            )
+        )
     if department is not None and stages:
         # The complaint's own paper belongs to the first stage, linked by an event or not.
         stages[0].documents += [d for d in documents.values() if d.kind == Document.Kind.COMPLAINT]

@@ -439,7 +439,6 @@ def create_complaint(job: LegacyImport, actor, data: dict[str, Any], documents: 
             description=data["description"],
             external_ref=data["external_ref"],
             village=data["village"],
-            category=data.get("category"),
             tags=tags,
             related_to=data.get("related_to"),
             attachment=Attachment(

@@ -1,4 +1,4 @@
-"""Filing a complaint: admin only, hidden everywhere but the Archive, and restorable."""
+"""Archiving (filing): SDM and Reviewer; restoring: SDM only. Hidden everywhere but the Archive."""
 
 import io
 
@@ -39,26 +39,28 @@ def do(client, user, complaint, action, **data):
 # --------------------------------------------------------------- who may file
 
 
-def test_only_the_admin_may_file_or_restore(sdm, reviewer, clerk, auditor, officer, complaint):
-    assert perms.can(sdm, perms.FILE, complaint)
-    for other in (reviewer, clerk, auditor, officer):
+def test_the_sdm_and_the_reviewer_may_file_but_only_the_sdm_restores(
+    sdm, reviewer, clerk, auditor, officer, complaint
+):
+    for allowed in (sdm, reviewer):
+        assert perms.can(allowed, perms.FILE, complaint), allowed
+    for other in (clerk, auditor, officer):
         assert not perms.can(other, perms.FILE, complaint), other
-    complaint = file_complaint(complaint, sdm, "x") and complaint
+    complaint = file_complaint(complaint, reviewer, "x") and complaint
     assert perms.can(sdm, perms.UNFILE, complaint)
     for other in (reviewer, clerk, auditor, officer):
         assert not perms.can(other, perms.UNFILE, complaint), other
 
 
-def test_the_reviewer_has_every_other_ability(reviewer, sdm, complaint):
-    """The complaints branch (Reviewer) can do all the admin can, except file and restore."""
+def test_the_sdm_can_also_restore_and_delete_stages(reviewer, sdm):
     from complaints.permissions import _ADMIN_ACTIONS, _REVIEWER_ACTIONS
 
-    assert _ADMIN_ACTIONS - _REVIEWER_ACTIONS == {perms.FILE, perms.UNFILE}
+    assert _ADMIN_ACTIONS - _REVIEWER_ACTIONS == {perms.UNFILE, perms.DELETE_STAGE}
     assert _REVIEWER_ACTIONS - _ADMIN_ACTIONS == set()
 
 
-def test_filing_through_the_ui_needs_a_reason_and_the_admin(client, sdm, reviewer, complaint):
-    assert do(client, reviewer, complaint, "file_complaint", reason="x").status_code == 403
+def test_filing_through_the_ui_needs_a_reason_and_the_right_login(client, sdm, clerk, complaint):
+    assert do(client, clerk, complaint, "file_complaint", reason="x").status_code == 403
     refused = do(client, sdm, complaint, "file_complaint", reason="")
     assert "required" in refused.content.decode().lower()
     complaint.refresh_from_db()
@@ -72,15 +74,15 @@ def test_filing_through_the_ui_needs_a_reason_and_the_admin(client, sdm, reviewe
     assert complaint.filing_reason == "Anonymous and untraceable"
 
 
-def test_the_menu_offers_filing_to_the_admin_only(client, sdm, reviewer, complaint):
-    url = reverse("complaints:action", args=[complaint.pk, "add_stage"])
-    client.force_login(sdm)
-    assert (
-        "File this complaint (move to Archive)"
-        in client.get(url, HTTP_HX_REQUEST="true").content.decode()
-    )
-    client.force_login(reviewer)
-    assert "File this complaint" not in client.get(url, HTTP_HX_REQUEST="true").content.decode()
+def test_the_archive_button_is_on_the_page_for_the_sdm_and_reviewer_only(
+    client, sdm, reviewer, clerk, complaint
+):
+    url = reverse("complaints:detail", args=[complaint.pk])
+    for user in (sdm, reviewer):
+        client.force_login(user)
+        assert "file_complaint" in client.get(url, **HX).content.decode()
+    client.force_login(clerk)
+    assert "file_complaint" not in client.get(url, **HX).content.decode()
 
 
 # ------------------------------------------------------------ where it vanishes

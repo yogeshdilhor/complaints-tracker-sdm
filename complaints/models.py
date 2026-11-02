@@ -43,6 +43,7 @@ class EventType(models.TextChoices):
     DOCUMENT_ATTACHED = "DOCUMENT_ATTACHED"
     DETAILS_EDITED = "DETAILS_EDITED"
     NOTE_ADDED = "NOTE_ADDED"
+    STAGE_DELETED = "STAGE_DELETED"  # points at an earlier event, which it hides
 
 
 class Tag(TimeStamped):

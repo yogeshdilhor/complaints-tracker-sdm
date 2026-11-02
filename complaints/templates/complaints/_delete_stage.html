@@ -1,0 +1,13 @@
+<form method="post" action="{% url 'complaints:stage_delete' complaint.pk event.pk %}"
+      hx-post="{% url 'complaints:stage_delete' complaint.pk event.pk %}" hx-target="#action-area" hx-swap="innerHTML"
+      class="action-form delete-stage">
+  {% csrf_token %}
+  <h4>Delete the stage &ldquo;{{ title }}&rdquo;?</h4>
+  <p class="error" role="alert"><b>Warning:</b> deleting a stage may amount to tampering with the record. It disappears from the timeline, its documents are no longer available, and the complaint's history will show that you deleted it, when, and why.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {{ form.as_div }}
+  <div class="form-buttons">
+    <button type="submit" class="danger">Yes, go ahead and delete</button>
+    <button type="button" class="secondary outline" onclick="document.getElementById('action-area').innerHTML=''">Cancel</button>
+  </div>
+</form>

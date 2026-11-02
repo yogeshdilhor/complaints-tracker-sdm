@@ -322,12 +322,12 @@ def test_department_officer_can_only_upload_a_report_on_own_case(
     login, officer, awaiting, make_complaint
 ):
     other = make_complaint()
-    # No note, no other document: reports only.
+    # No note: a report, or a document of their own, and nothing else.
     assert (
         login(officer).post(action_url(awaiting, "add_note"), {"text": "x"}, **HX).status_code
         == 403
     )
-    assert login(officer).get(action_url(awaiting, "attach_document"), **HX).status_code == 403
+    assert login(officer).get(action_url(awaiting, "attach_document"), **HX).status_code == 200
     assert login(officer).get(action_url(other, "record_report"), **HX).status_code == 404
 
     # The report file is required.
@@ -343,9 +343,11 @@ def test_department_officer_can_only_upload_a_report_on_own_case(
     awaiting.refresh_from_db()
     assert awaiting.current_state == State.UNDER_REVIEW
     assert awaiting.documents.filter(kind="inquiry_report", uploaded_by=officer).count() == 1
-    # The case stays visible to them for reference, but they can do nothing more to it.
+    # The case stays visible to them for reference; all they can still do is add a document.
     page = login(officer).get(reverse("complaints:detail", args=[awaiting.pk]))
-    assert page.status_code == 200 and 'add-menu"' not in page.content.decode().split("<main")[1]
+    html = page.content.decode().split("<main")[1]
+    assert page.status_code == 200 and "/do/attach_document/" in html
+    assert "/do/record_report/" not in html and "/do/add_stage/" not in html
     assert login(officer).get(action_url(awaiting, "record_report"), **HX).status_code == 403
 
 
