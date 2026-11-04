@@ -181,9 +181,8 @@ def test_the_confirmation_remembers_the_departments_the_document_names(
     )
     client.force_login(clerk)
     html = client.post(url(c), {"file": pdf()}, **HX).content.decode()
-    # the officer wheel opens on the Tehsildar, not on "Choose..."
-    wheel = html.split('data-name="department"')[1].split("</ul>")[0]
-    assert 'class="selected">Tehsildar<' in wheel
+    # the officer picker opens on the Tehsildar, not on "Choose..."
+    assert f'<option value="{tehsildar.pk}" data-group="" selected>Tehsildar</option>' in html
     assert "Please report in a week" in html
 
 

@@ -209,6 +209,8 @@ a.card.bucket-closed { border-left-color: #9aa3b2; }
 .add-menu li { margin: 0; padding: 0; }
 .add-menu li button { display: block; width: 100%; margin: 0; padding: .4rem .65rem; border: 0; border-radius: .4rem; background: none; color: var(--ink); font-size: .82rem; font-weight: 500; text-align: left; }
 .add-menu li button:hover { background: #f0f3f9; }
+.add-menu li button small { display: block; font-weight: 400; color: var(--muted-ink); }
+.add-menu li button.menu-danger { color: var(--bucket-critical); }
 
 .action-form { padding: .8rem .9rem .3rem; margin: 0 0 .9rem; background: #fafbfd; border: 1px solid var(--line-2); border-radius: .6rem; }
 .action-form h4 { margin-bottom: .6rem; }
@@ -585,3 +587,5 @@ button:active, [role="button"]:active, .cta:active, .add-btn:active { transform:
 .cal-grid button:hover { background: #eaf0fb; }
 .cal-grid button.today { box-shadow: inset 0 0 0 1px var(--accent); }
 .smart-hint { margin: 0 0 .4rem; }
+
+.action-form .helptext { margin: 0 0 .25rem; font-size: .78rem; color: var(--muted-ink); }

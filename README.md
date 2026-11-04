@@ -74,8 +74,8 @@ Each role is a Django group created by a migration.
 | --- | --- |
 | Clerk | Register, edit, add notes and files, issue and reissue notices, record reports, submit to the portal, record portal accepted or rejected |
 | DepartmentOfficer | A view-only login for one office or department, made by the SDM (Reviewer or Admin) when marking a complaint, or on the Officer logins page. Sees every complaint ever marked to their office, but only the stages and documents that concern it. They can upload their report while a case is waiting for it, and add a document (their response) to any of their cases; nothing else. Logins expire after 30 days |
-| Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen, archive a complaint |
-| Admin | Everything a Reviewer can, plus restoring archived complaints, deleting a stage (note or document stages only; logged as a STAGE_DELETED event, never erased), plus master data and users in the Django admin (`/admin/`; the user needs "staff status") |
+| Reviewer | Everything a Clerk can, plus review (satisfied or not), close without portal, reopen, archive a complaint, **Edit stage** (add a stage, change the department/officer it is marked to, delete a note or document stage; a deletion is logged as a STAGE_DELETED event and never erased) |
+| Admin | Everything a Reviewer can, plus restoring archived complaints and master data and users in the Django admin (`/admin/`; the user needs "staff status") |
 | Auditor | Read-only |
 
 Django's superuser flag grants nothing inside the app; roles do. Case tables (complaints, referrals, documents, events) are read-only even in the Django admin.

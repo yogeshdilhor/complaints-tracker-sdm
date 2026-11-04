@@ -164,7 +164,7 @@ def test_an_officer_is_still_required(client, clerk, make_complaint):
     assert c.current_state == "RECEIVED"
 
 
-def test_the_form_renders_wheels_for_the_officer_and_the_title(
+def test_the_form_has_a_department_then_officer_picker_and_a_typed_title(
     client, clerk, make_complaint, tehsildar
 ):
     from django.urls import reverse
@@ -174,9 +174,11 @@ def test_the_form_renders_wheels_for_the_officer_and_the_title(
     html = client.get(
         reverse("complaints:action", args=[c.pk, "issue_notice"]), HTTP_HX_REQUEST="true"
     ).content.decode()
-    assert html.count('class="wheel-field"') == 1  # only the officer; the title is typed
+    # the same picker as on the Register page: department, then officer, each can be added
+    assert 'name="concerned_department"' in html and 'name="department"' in html
+    assert 'name="concerned_department_own"' in html and 'name="department_own"' in html
     assert 'data-smart-title="1"' in html and "stage-menu-data" in html
-    assert ">Tehsildar</li>" in html
+    assert ">Tehsildar</option>" in html
 
 
 # ------------------------------------------------ custom stages and documents on any stage

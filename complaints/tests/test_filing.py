@@ -52,10 +52,11 @@ def test_the_sdm_and_the_reviewer_may_file_but_only_the_sdm_restores(
         assert not perms.can(other, perms.UNFILE, complaint), other
 
 
-def test_the_sdm_can_also_restore_and_delete_stages(reviewer, sdm):
+def test_only_restoring_is_left_to_the_sdm(reviewer, sdm):
     from complaints.permissions import _ADMIN_ACTIONS, _REVIEWER_ACTIONS
 
-    assert _ADMIN_ACTIONS - _REVIEWER_ACTIONS == {perms.UNFILE, perms.DELETE_STAGE}
+    assert {perms.DELETE_STAGE, perms.CHANGE_MARKING} <= _REVIEWER_ACTIONS
+    assert _ADMIN_ACTIONS - _REVIEWER_ACTIONS == {perms.UNFILE}
     assert _REVIEWER_ACTIONS - _ADMIN_ACTIONS == set()
 
 

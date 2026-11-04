@@ -16,7 +16,8 @@ EDIT_DETAILS = "edit_details"
 ADD_STAGE = "add_stage"  # a stage the user names themselves, with any documents
 MANAGE_LOGINS = "manage_logins"  # create, renew and switch off officer logins
 FILE = "file_complaint"  # move a complaint to the Archive: the SDM (Admin) and Reviewer
-DELETE_STAGE = "delete_stage"  # take a note or document stage off the timeline: the SDM only
+DELETE_STAGE = "delete_stage"  # take a note or document stage off the timeline: SDM, Reviewer
+CHANGE_MARKING = "change_marking"  # move a complaint to another department or officer
 UNFILE = "unfile_complaint"  # bring it back: the admin (SDM) only
 
 _CLERK_ACTIONS = {
@@ -38,9 +39,9 @@ _REVIEWER_ACTIONS = _CLERK_ACTIONS | {
     Action.CLOSE_WITHOUT_PORTAL,
     Action.REOPEN,
 }
-_REVIEWER_ACTIONS |= {MANAGE_LOGINS, FILE}  # the SDM and the steno may both archive
-# ...but only the SDM may bring one back, or delete a stage
-_ADMIN_ACTIONS = _REVIEWER_ACTIONS | {UNFILE, DELETE_STAGE}
+# The SDM and the steno (Reviewer) may archive, delete a stage and change the marking...
+_REVIEWER_ACTIONS |= {MANAGE_LOGINS, FILE, DELETE_STAGE, CHANGE_MARKING}
+_ADMIN_ACTIONS = _REVIEWER_ACTIONS | {UNFILE}  # ...but only the SDM may bring an archived one back
 
 
 _OFFICE_WIDE = {Role.CLERK, Role.REVIEWER, Role.ADMIN, Role.AUDITOR}
@@ -92,6 +93,12 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
     seen = visible_complaints(user, include_filed=action == UNFILE)
     if complaint is not None and not seen.filter(pk=complaint.pk).exists():
         return False
+    if (
+        action == CHANGE_MARKING
+        and complaint is not None
+        and complaint.current_state not in (State.RECEIVED, State.AWAITING_REPORT)
+    ):
+        return False  # from other states, "ask again" and the portal steps do the marking
     roles = _roles(user)
     allowed: set = set()
     if Role.CLERK in roles:

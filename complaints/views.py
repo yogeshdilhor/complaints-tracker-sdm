@@ -22,6 +22,7 @@ from complaints.forms import (
     ACTION_FORMS,
     AddStageForm,
     AttachDocumentForm,
+    ChangeMarkingForm,
     ComplaintFilterForm,
     DeleteStageForm,
     EditDetailsForm,
@@ -67,7 +68,7 @@ from complaints.services.pendency import (
 )
 from complaints.services.search import filter_complaints, kpi_counts, paginate
 from complaints.services.summary import build_summary
-from complaints.services.timeline import build_timeline, describe_event, portal_name
+from complaints.services.timeline import build_timeline, portal_name
 from complaints.workflow import (
     Action,
     TransitionError,
@@ -98,6 +99,7 @@ ACTION_LABELS = {
     perms.ADD_NOTE: "Add note",
     perms.EDIT_DETAILS: "Edit details",
     perms.ADD_STAGE: "Add a stage",
+    perms.CHANGE_MARKING: "Change department / officer",
     perms.FILE: "Archive this complaint",
     perms.UNFILE: "Restore this complaint",
 }
@@ -114,6 +116,7 @@ MENU_LABELS = {
     Action.CLOSE_WITHOUT_PORTAL: "Resolve and file",
     Action.REOPEN: "Re-open the complaint",
     perms.ADD_STAGE: "Custom stage: name it yourself",
+    perms.CHANGE_MARKING: "Change the department / officer it is marked to",
     perms.EDIT_DETAILS: "Correct complainant details",
     perms.ATTACH_DOCUMENT: "Add your response (a document)",
     perms.FILE: "Archive this complaint",
@@ -215,20 +218,23 @@ def _detail_context(request: HttpRequest, complaint: Complaint, **extra: Any) ->
     if _officer_only(user) and perms.can(user, perms.ATTACH_DOCUMENT, complaint):
         actions.append((perms.ATTACH_DOCUMENT, MENU_LABELS[perms.ATTACH_DOCUMENT]))
     open_referral = complaint.referrals.filter(closed_on__isnull=True).first()
+    timeline = build_timeline(
+        complaint, department=user.department if _officer_only(user) else None
+    )
     return {
         "complaint": complaint,
         "summary": build_summary(complaint),
-        "timeline": build_timeline(
-            complaint, department=user.department if _officer_only(user) else None
-        ),
+        "timeline": timeline,
         "is_officer": _officer_only(user),
         "can_unfile": perms.can(user, perms.UNFILE, complaint),
         "can_file": perms.can(user, perms.FILE, complaint),
-        "can_delete_stage": perms.can(user, perms.DELETE_STAGE, complaint),
+        "can_edit_stage": perms.can(user, perms.DELETE_STAGE, complaint),
+        "can_change_marking": perms.can(user, perms.CHANGE_MARKING, complaint),
         "created_login": _pop_created_login(request),
         "actions": actions,
         "can_auto_stage": perms.can(user, perms.ADD_STAGE, complaint),
         "can_edit_details": perms.can(user, perms.EDIT_DETAILS, complaint),
+        "has_deletable_stages": any(st.deletable for st in timeline),
         "total_age": total_age_days(complaint),
         "open_referral": open_referral,
         "referral_overdue": bool(open_referral and open_referral.due_on < timezone.localdate()),
@@ -280,6 +286,7 @@ def _form_for(
         perms.ATTACH_DOCUMENT: AttachDocumentForm,
         perms.ADD_NOTE: NoteForm,
         perms.ADD_STAGE: AddStageForm,
+        perms.CHANGE_MARKING: ChangeMarkingForm,
         perms.EDIT_DETAILS: EditDetailsForm,
         perms.FILE: FileComplaintForm,
         perms.UNFILE: UnfileForm,
@@ -303,7 +310,7 @@ def _run_action(
     """
     data = form.cleaned_data
     wants_login = bool(data.get("create_login")) and (
-        action in ACTION_FORMS or action == perms.ADD_STAGE
+        action in ACTION_FORMS or action in (perms.ADD_STAGE, perms.CHANGE_MARKING)
     )
     credentials = None
     with transaction.atomic():
@@ -350,14 +357,18 @@ def _run_action(
                 supersedes=data.get("supersedes"),
                 headline=headline,
             )
-        elif action == perms.ADD_STAGE:
+        elif action in (perms.ADD_STAGE, perms.CHANGE_MARKING):
             documents = [
                 store_document(complaint, a, Document.Kind.OTHER, user) for a in data["files"]
             ]
             if staged is not None:
                 staged_doc = store_document(complaint, staged, Document.Kind.OTHER, user)
                 documents.append(staged_doc)
-            _add_custom_stage(complaint, user, data | form.transition_data(), documents)
+            stage = data | form.transition_data()
+            if action == perms.ADD_STAGE:
+                _add_custom_stage(complaint, user, stage, documents)
+            elif not _mark_to(complaint, user, stage, documents):
+                raise TransitionError("This complaint cannot be marked to anyone right now.")
             if wants_login:
                 complaint.refresh_from_db()
                 if complaint.current_department is None:
@@ -417,33 +428,40 @@ def _stage_menu(request: HttpRequest, complaint: Complaint, *, with_actions: boo
     return rows
 
 
+def _mark_to(complaint: Complaint, user, data: dict, documents: list[Document]) -> bool:
+    """Mark the complaint to `data["department"]` (a first notice, or a re-issue to a different
+    office or a reminder to the same one), with the reply-by date and comments. False if the
+    complaint is in a state, or the user in a role, where that is not possible."""
+    department = data.get("department")
+    state = complaint.current_state
+    if department is None or state not in (State.RECEIVED, State.AWAITING_REPORT):
+        return False
+    action = Action.ISSUE_NOTICE if state == State.RECEIVED else Action.REISSUE_NOTICE
+    if not perms.can(user, action, complaint):
+        return False
+    fields: dict[str, Any] = {"department": department}
+    if data.get("due_on"):
+        fields["due_on"] = data["due_on"]
+    if state == State.AWAITING_REPORT:
+        same = department == complaint.current_department  # a reminder to the same office
+        fields["outcome"] = Referral.Outcome.NO_RESPONSE if same else Referral.Outcome.SUPERSEDED
+    apply_transition(
+        complaint,
+        action,
+        user,
+        remarks=data.get("note", ""),
+        headline=data.get("headline", ""),
+        extra_documents=documents,
+        **fields,
+    )
+    return True
+
+
 def _add_custom_stage(complaint: Complaint, user, data: dict, documents: list[Document]) -> None:
     """A stage the user wrote. If they marked it to a department or officer, the complaint is
     marked there too, with the date by which the reply is wanted."""
-    department = data.get("department")
-    state = complaint.current_state
-    if department is not None and state in (State.RECEIVED, State.AWAITING_REPORT):
-        action = Action.ISSUE_NOTICE if state == State.RECEIVED else Action.REISSUE_NOTICE
-        if perms.can(user, action, complaint):
-            fields: dict[str, Any] = {"department": department}
-            if data.get("due_on"):
-                fields["due_on"] = data["due_on"]
-            if state == State.AWAITING_REPORT:
-                same = department == complaint.current_department  # a reminder to the same office
-                fields["outcome"] = (
-                    Referral.Outcome.NO_RESPONSE if same else Referral.Outcome.SUPERSEDED
-                )
-            apply_transition(
-                complaint,
-                action,
-                user,
-                remarks=data.get("note", ""),
-                headline=data["headline"],
-                extra_documents=documents,
-                **fields,
-            )
-            return
-    add_stage(complaint, user, data["headline"], data.get("note", ""), documents)
+    if not _mark_to(complaint, user, data, documents):
+        add_stage(complaint, user, data["headline"], data.get("note", ""), documents)
 
 
 @login_required
@@ -539,16 +557,16 @@ def complaint_action(request: HttpRequest, pk: int, action: str) -> HttpResponse
 
 @login_required
 @require_http_methods(["GET", "POST"])
-def stage_delete(request: HttpRequest, pk: int, event_id: int) -> HttpResponse:
-    """Delete a stage (SDM only), after a warning that it may amount to tampering."""
+def stage_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    """Delete a stage (SDM and Reviewer), after a warning that it may amount to tampering."""
     complaint = _visible_complaint(request, pk)
     if not perms.can(request.user, perms.DELETE_STAGE, complaint):
-        return HttpResponseForbidden("Only the SDM can delete a stage.")
-    event = get_object_or_404(complaint.events, pk=event_id)
-    title, _, _ = describe_event(event, complaint)
-    form = DeleteStageForm(request.POST or None)
+        return HttpResponseForbidden("You are not allowed to delete a stage.")
+    stages = [s for s in build_timeline(complaint) if s.deletable]
+    form = DeleteStageForm(request.POST or None, stages=stages)
     error = None
     if request.method == "POST" and form.is_valid():
+        event = get_object_or_404(complaint.events, pk=int(form.cleaned_data["event_id"]))
         try:
             delete_stage(complaint, request.user, event, form.cleaned_data["reason"])
         except TransitionError as exc:
@@ -564,7 +582,7 @@ def stage_delete(request: HttpRequest, pk: int, event_id: int) -> HttpResponse:
             response["HX-Retarget"] = "#detail-pane"
             response["HX-Reswap"] = "innerHTML"
             return response
-    context = {"complaint": complaint, "event": event, "title": title, "form": form, "error": error}
+    context = {"complaint": complaint, "form": form, "error": error, "has_stages": bool(stages)}
     return render(request, "complaints/_delete_stage.html", context)
 
 

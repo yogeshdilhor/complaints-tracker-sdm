@@ -1,13 +1,19 @@
-<form method="post" action="{% url 'complaints:stage_delete' complaint.pk event.pk %}"
-      hx-post="{% url 'complaints:stage_delete' complaint.pk event.pk %}" hx-target="#action-area" hx-swap="innerHTML"
+<form method="post" action="{% url 'complaints:stage_delete' complaint.pk %}"
+      hx-post="{% url 'complaints:stage_delete' complaint.pk %}" hx-target="#action-area" hx-swap="innerHTML"
+      hx-confirm="Deleting a stage may amount to tampering with the record. Delete it anyway?"
       class="action-form delete-stage">
   {% csrf_token %}
-  <h4>Delete the stage &ldquo;{{ title }}&rdquo;?</h4>
-  <p class="error" role="alert"><b>Warning:</b> deleting a stage may amount to tampering with the record. It disappears from the timeline, its documents are no longer available, and the complaint's history will show that you deleted it, when, and why.</p>
+  <h4>Delete a stage</h4>
+  <p class="error" role="alert"><b>Warning:</b> deleting a stage may amount to tampering with the record. It disappears from the timeline, its documents are no longer available, and the complaint's history will show that it was deleted, by whom, when, and why.</p>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if has_stages %}
   {{ form.as_div }}
   <div class="form-buttons">
     <button type="submit" class="danger">Yes, go ahead and delete</button>
     <button type="button" class="secondary outline" onclick="document.getElementById('action-area').innerHTML=''">Cancel</button>
   </div>
+  {% else %}
+  <p class="muted">There is no stage that can be deleted. Stages that moved the case (marked to an officer, report received, review, portal) are part of its state and stay.</p>
+  <button type="button" class="secondary outline" onclick="document.getElementById('action-area').innerHTML=''">Close</button>
+  {% endif %}
 </form>

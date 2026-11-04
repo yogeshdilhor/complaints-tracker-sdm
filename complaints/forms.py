@@ -13,7 +13,7 @@ from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
 from complaints.services.search import BUCKET_CHOICES
 from complaints.services.timeline import portal_name
-from complaints.widgets import GroupedAddSelect, VillageWidget, WheelWidget
+from complaints.widgets import GroupedAddSelect, VillageWidget
 from complaints.workflow import NEXT_STEPS, REISSUE_OUTCOMES, Action
 from core.models import ConcernedDepartment, Department, Office, Village
 
@@ -87,7 +87,9 @@ class DepartmentPickerMixin:
     typed name into a real row.
     """
 
-    def _wire_department_fields(self, office: Office, *, required: bool = False) -> None:
+    def _wire_department_fields(
+        self, office: Office, *, required: bool = False, empty_label: str | None = None
+    ) -> None:
         self._office = office
         self._department_required = required
         concerned = ConcernedDepartment.objects.filter(office=office)
@@ -108,7 +110,7 @@ class DepartmentPickerMixin:
                 if d.concerned_department_id
             },
             controlled_by="concerned_department",
-            empty_label="Choose..." if required else "Not marked yet",
+            empty_label=empty_label or ("Choose..." if required else "Not marked yet"),
             own_placeholder="Type the officer or office",
         )
 
@@ -267,7 +269,7 @@ def _headline_field(complaint: Complaint, action: str | None) -> forms.CharField
     )
 
 
-class ActionForm(forms.Form):
+class ActionForm(DepartmentPickerMixin, forms.Form):
     """Base for forms that feed apply_transition().
 
     `transition_fields` are passed through when filled in. If `file_key` is set the
@@ -281,13 +283,16 @@ class ActionForm(forms.Form):
     def __init__(self, *args, complaint: Complaint, **kwargs):
         super().__init__(*args, **kwargs)
         self.complaint = complaint
-        self._new_department = ""
         self.fields["files"] = MultiAttachmentField(
             required=False, label="More documents for this stage (any number)"
         )
         self.fields["headline"] = _headline_field(complaint, _ACTION_OF_FORM.get(type(self)))
-        self.order_fields(["department", "headline"])
         if "department" in self.fields:
+            self.fields["concerned_department"] = forms.ModelChoiceField(
+                queryset=ConcernedDepartment.objects.none(),
+                required=False,
+                label="Department",
+            )
             self.fields["create_login"] = forms.BooleanField(
                 required=False,
                 label="Also create a login for this officer (valid for a month)",
@@ -297,36 +302,28 @@ class ActionForm(forms.Form):
                 max_length=150,
                 label="Officer's name (shown on the login, optional)",
             )
-            departments = _active_departments(complaint.office)
-            field = self.fields["department"]
-            self._department_required = field.required
-            field.queryset = departments
-            field.required = False  # "Write my own" posts no id; clean() checks instead
-            field.widget = WheelWidget(
-                [("", "Choose...")] + [(d.pk, str(d)) for d in departments],
-                own_placeholder="Type the officer or office",
-                data={"kind": "officer"},
+            self._wire_department_fields(
+                complaint.office, required=self.fields["department"].required
             )
+        self.order_fields(["concerned_department", "department", "headline"])
 
     def clean(self):
         cleaned = super().clean()
-        if "department" in self.fields and not cleaned.get("department"):
-            own = (self.data.get("department_own") or "").strip()
-            if own:
-                self._new_department = own[:200]
-            elif self._department_required:
-                self.add_error("department", "Choose who this goes to, or write the name.")
+        if "department" in self.fields:
+            self._clean_department_own()
         return cleaned
 
     def transition_data(self) -> dict[str, Any]:
-        """Call inside the transaction: a typed-in officer becomes a department here."""
+        """Call inside the transaction: a typed-in department or officer becomes a row here."""
         data = {}
         for name in self.transition_fields:
             value = self.cleaned_data.get(name)
             if value not in (None, ""):
                 data[name] = value
-        if self._new_department:
-            data["department"] = _department_named(self.complaint.office, self._new_department)
+        if "department" in self.fields:
+            department = self.resolve_department()
+            if department is not None:
+                data["department"] = department
         if self.cleaned_data.get("headline"):
             data["headline"] = self.cleaned_data["headline"]
         return data
@@ -457,11 +454,19 @@ class FileComplaintForm(forms.Form):
 
 
 class DeleteStageForm(forms.Form):
-    """Deleting a stage is confirmed with a reason, which stays on the record."""
+    """Pick the stage to delete, with a reason that stays on the record. Only stages that carry
+    words and documents are offered; a stage that moved the case cannot be removed."""
 
+    event_id = forms.ChoiceField(widget=forms.RadioSelect, label="Which stage?")
     reason = forms.CharField(
         widget=forms.Textarea(attrs={"rows": 2}), label="Why is this stage being deleted?"
     )
+
+    def __init__(self, *args, stages=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["event_id"].choices = [
+            (str(s.event_id), f"{s.title} ({s.at:%d %b %Y})") for s in stages
+        ]
 
 
 class UnfileForm(forms.Form):
@@ -480,7 +485,7 @@ class AddStageForm(ActionForm):
     any number of documents."""
 
     transition_fields = ("department", "due_on")
-    department = _department_field(False, "Mark to (department / officer)")
+    department = _department_field(False, "Mark to (officer / office)")
     note = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 3}), label="Your comments"
     )
@@ -500,7 +505,9 @@ class AddStageForm(ActionForm):
             "Type $ for the usual stage titles, or write your own"
         )
         self.fields["headline"] = headline
-        self.order_fields(["headline", "department", "due_on", "note", "files"])
+        self.order_fields(
+            ["headline", "concerned_department", "department", "due_on", "note", "files"]
+        )
 
     def clean_headline(self) -> str:
         value = (self.cleaned_data.get("headline") or "").strip()
@@ -516,7 +523,7 @@ class AddStageForm(ActionForm):
 
     def clean(self):
         cleaned = super().clean()
-        marked = cleaned.get("department") or self._new_department
+        marked = cleaned.get("department") or self._own_department
         if marked and self.complaint.current_state not in (State.RECEIVED, State.AWAITING_REPORT):
             self.add_error(
                 "department",
@@ -524,6 +531,22 @@ class AddStageForm(ActionForm):
                 "cannot be marked to an officer here. Use the review or portal steps instead.",
             )
         return cleaned
+
+
+class ChangeMarkingForm(AddStageForm):
+    """Move a complaint to a different department or officer (or remind the same one): the
+    department is required, the stage title is optional and defaults to "Marked to ..."."""
+
+    department = _department_field(True, "Move to (officer / office)")
+
+    def __init__(self, *args, complaint: Complaint, **kwargs):
+        super().__init__(*args, complaint=complaint, **kwargs)
+        self.fields["headline"].required = False
+        self.fields["headline"].label = "Stage title (optional)"
+        self.fields["headline"].widget.attrs["placeholder"] = "Blank = \u201cMarked to ...\u201d"
+
+    def clean_headline(self) -> str:
+        return (self.cleaned_data.get("headline") or "").strip()
 
 
 class AttachDocumentForm(forms.Form):

@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}SDM Complaint Tracker{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'vendor/pico.min.css' %}">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=3">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=5">
   <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
   <script src="{% static 'js/wheel.js' %}?v=3" defer></script>
   <script src="{% static 'js/mentions.js' %}?v=3" defer></script>
   <script src="{% static 'js/splitter.js' %}" defer></script>
-  <script src="{% static 'js/cascade.js' %}?v=1" defer></script>
+  <script src="{% static 'js/cascade.js' %}?v=2" defer></script>
   <script src="{% static 'js/translate.js' %}?v=1" defer></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
