@@ -20,6 +20,10 @@ DELETE_STAGE = "delete_stage"  # take a note or document stage off the timeline:
 CHANGE_MARKING = "change_marking"  # move a complaint to another department or officer
 UNFILE = "unfile_complaint"  # bring it back: the admin (SDM) only
 
+# States from which a complaint can be marked to a (different) department: not yet marked,
+# waiting for a report, or a report is in (say, "this does not concern us, try X").
+MARKABLE_STATES = (State.RECEIVED, State.AWAITING_REPORT, State.UNDER_REVIEW)
+
 _CLERK_ACTIONS = {
     REGISTER,
     ATTACH_DOCUMENT,
@@ -96,9 +100,9 @@ def can(user, action: str, complaint: Complaint | None = None) -> bool:
     if (
         action == CHANGE_MARKING
         and complaint is not None
-        and complaint.current_state not in (State.RECEIVED, State.AWAITING_REPORT)
+        and complaint.current_state not in MARKABLE_STATES
     ):
-        return False  # from other states, "ask again" and the portal steps do the marking
+        return False  # once approved or on the portal, the portal steps do the marking
     roles = _roles(user)
     allowed: set = set()
     if Role.CLERK in roles:

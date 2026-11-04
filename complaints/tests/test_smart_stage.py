@@ -91,10 +91,26 @@ def test_the_reply_date_cannot_be_in_the_past(client, clerk, make_complaint, teh
     assert c.current_state == State.RECEIVED
 
 
-def test_a_case_under_review_cannot_be_marked_from_here(client, clerk, make_complaint, tehsildar):
+def test_a_clerk_cannot_mark_a_case_under_review_and_is_told_so(
+    client, clerk, make_complaint, tehsildar, bdpo
+):
     client.force_login(clerk)
     c = make_complaint()
     apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar)
     apply_transition(c, Action.RECORD_REPORT, clerk)
-    html = post_stage(client, c, department=tehsildar.pk).content.decode()
+    html = post_stage(client, c, department=bdpo.pk).content.decode()
+    assert "not allowed to mark" in html
+    c.refresh_from_db()
+    assert c.current_state == State.UNDER_REVIEW and c.current_department is None
+
+
+def test_an_approved_case_cannot_be_marked_from_here(
+    client, reviewer, clerk, make_complaint, tehsildar, bdpo
+):
+    client.force_login(reviewer)
+    c = make_complaint()
+    apply_transition(c, Action.ISSUE_NOTICE, clerk, department=tehsildar)
+    apply_transition(c, Action.RECORD_REPORT, clerk)
+    apply_transition(c, Action.REVIEW_SATISFIED, reviewer, note="ok")
+    html = post_stage(client, c, department=bdpo.pk).content.decode()
     assert "cannot be marked to an officer here" in html

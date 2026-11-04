@@ -434,12 +434,23 @@ def _mark_to(complaint: Complaint, user, data: dict, documents: list[Document]) 
     complaint is in a state, or the user in a role, where that is not possible."""
     department = data.get("department")
     state = complaint.current_state
-    if department is None or state not in (State.RECEIVED, State.AWAITING_REPORT):
+    if department is None or state not in perms.MARKABLE_STATES:
         return False
-    action = Action.ISSUE_NOTICE if state == State.RECEIVED else Action.REISSUE_NOTICE
+    action = {
+        State.RECEIVED: Action.ISSUE_NOTICE,
+        State.AWAITING_REPORT: Action.REISSUE_NOTICE,
+        State.UNDER_REVIEW: Action.REVIEW_NOT_SATISFIED,
+    }[state]
     if not perms.can(user, action, complaint):
         return False
     fields: dict[str, Any] = {"department": department}
+    headline = data.get("headline", "")
+    if state == State.UNDER_REVIEW:
+        # The report in hand did not settle it (e.g. "not our subject"): ask someone else.
+        fields["note"] = data.get("note") or (
+            "The reply did not settle the matter; marked to a different department."
+        )
+        headline = headline or f"Marked to {department} instead"
     if data.get("due_on"):
         fields["due_on"] = data["due_on"]
     if state == State.AWAITING_REPORT:
@@ -450,7 +461,7 @@ def _mark_to(complaint: Complaint, user, data: dict, documents: list[Document]) 
         action,
         user,
         remarks=data.get("note", ""),
-        headline=data.get("headline", ""),
+        headline=headline,
         extra_documents=documents,
         **fields,
     )
@@ -460,8 +471,12 @@ def _mark_to(complaint: Complaint, user, data: dict, documents: list[Document]) 
 def _add_custom_stage(complaint: Complaint, user, data: dict, documents: list[Document]) -> None:
     """A stage the user wrote. If they marked it to a department or officer, the complaint is
     marked there too, with the date by which the reply is wanted."""
-    if not _mark_to(complaint, user, data, documents):
-        add_stage(complaint, user, data["headline"], data.get("note", ""), documents)
+    if _mark_to(complaint, user, data, documents):
+        return
+    if data.get("department") is not None:
+        # Do not quietly drop the department: the user asked for it and cannot have it.
+        raise TransitionError("You are not allowed to mark this complaint to a department now.")
+    add_stage(complaint, user, data["headline"], data.get("note", ""), documents)
 
 
 @login_required

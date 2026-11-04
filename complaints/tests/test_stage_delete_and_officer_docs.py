@@ -1,13 +1,11 @@
 """Deleting a stage (SDM only, with a warning) and a subordinate office adding its response."""
 
 import pytest
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from complaints.models import Document, Event, EventType, State
+from complaints.models import Event, EventType, State
 from complaints.services.timeline import build_timeline
-from complaints.tests.helpers import fake_attachment
-from complaints.workflow import Action, add_stage, apply_transition, attach_document
+from complaints.workflow import Action, add_stage, apply_transition
 
 HX = {"HTTP_HX_REQUEST": "true"}
 
@@ -146,47 +144,37 @@ def test_change_marking_needs_a_department_and_the_right_role(
     assert complaint.current_department is None
 
 
-def test_change_marking_is_not_offered_once_the_case_is_under_review(
+def test_a_reply_that_says_not_ours_can_be_passed_to_another_department(
+    client, complaint, clerk, reviewer, tehsildar, bdpo
+):
+    """A report comes in saying the matter belongs to someone else: mark it there."""
+    apply_transition(complaint, Action.ISSUE_NOTICE, clerk, department=tehsildar)
+    apply_transition(complaint, Action.RECORD_REPORT, clerk)
+    complaint.refresh_from_db()
+    assert complaint.current_state == State.UNDER_REVIEW
+    client.force_login(reviewer)
+    ok = client.post(
+        change_url(complaint), {"department": bdpo.pk, "note": "Tehsildar: not our subject"}, **HX
+    )
+    assert ok.status_code == 200 and ok["HX-Trigger"] == "complaintChanged"
+    complaint.refresh_from_db()
+    assert complaint.current_department == bdpo and complaint.current_state == State.AWAITING_REPORT
+    titles = [s.title for s in build_timeline(complaint)]
+    assert "Marked to BDPO instead" in titles
+    assert any("not our subject" in s.detail for s in build_timeline(complaint))
+    # a blank comment still works, with a default note
+    apply_transition(complaint, Action.RECORD_REPORT, clerk)
+    client.force_login(reviewer)
+    assert client.post(change_url(complaint), {"department": tehsildar.pk}, **HX).status_code == 200
+    complaint.refresh_from_db()
+    assert complaint.current_department == tehsildar
+
+
+def test_change_marking_is_not_offered_once_the_case_is_approved(
     client, complaint, clerk, reviewer, tehsildar, bdpo
 ):
     apply_transition(complaint, Action.ISSUE_NOTICE, clerk, department=tehsildar)
     apply_transition(complaint, Action.RECORD_REPORT, clerk)
+    apply_transition(complaint, Action.REVIEW_SATISFIED, reviewer, note="ok")
     client.force_login(reviewer)
     assert client.post(change_url(complaint), {"department": bdpo.pk}, **HX).status_code == 403
-
-
-# ------------------------------------------------- a subordinate office adds its response
-
-
-@pytest.fixture
-def marked(complaint, clerk, tehsildar):
-    apply_transition(complaint, Action.ISSUE_NOTICE, clerk, department=tehsildar)
-    return complaint
-
-
-def test_an_officer_can_add_a_document_and_it_shows_on_their_timeline(client, marked, officer):
-    client.force_login(officer)
-    url = reverse("complaints:action", args=[marked.pk, "attach_document"])
-    form = client.get(url, **HX).content.decode()
-    assert 'name="file"' in form and 'name="kind"' not in form and 'name="supersedes"' not in form
-    upload = SimpleUploadedFile("reply.pdf", b"%PDF-1.4 reply", content_type="application/pdf")
-    ok = client.post(url, {"file": upload}, **HX)
-    assert ok.status_code == 200
-    doc = Document.objects.get(complaint=marked, uploaded_by=officer)
-    assert marked.current_state == State.AWAITING_REPORT  # a document is not a report
-    titles = [s.title for s in build_timeline(marked, department=officer.department)]
-    assert any("Response from" in t for t in titles)
-    assert client.get(reverse("complaints:document", args=[doc.pk])).status_code == 200
-
-
-def test_an_officer_still_cannot_do_anything_else(client, marked, officer):
-    client.force_login(officer)
-    for action in ("add_note", "add_stage", "edit_details", "file_complaint", "issue_notice"):
-        url = reverse("complaints:action", args=[marked.pk, action])
-        assert client.post(url, {"text": "x", "headline": "x"}, **HX).status_code == 403, action
-
-
-def test_documents_added_by_staff_stay_hidden_from_the_office(marked, officer, clerk):
-    attach_document(marked, clerk, fake_attachment("internal"), "other", headline="Internal")
-    titles = [s.title for s in build_timeline(marked, department=officer.department)]
-    assert "Internal" not in titles

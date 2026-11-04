@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from complaints.models import Complaint, Document, Platform, State, Tag
+from complaints.permissions import MARKABLE_STATES
 from complaints.services import legacy
 from complaints.services.documents import UploadError, read_upload
 from complaints.services.intake import normalise_phone
@@ -524,11 +525,11 @@ class AddStageForm(ActionForm):
     def clean(self):
         cleaned = super().clean()
         marked = cleaned.get("department") or self._own_department
-        if marked and self.complaint.current_state not in (State.RECEIVED, State.AWAITING_REPORT):
+        if marked and self.complaint.current_state not in MARKABLE_STATES:
             self.add_error(
                 "department",
                 f"This complaint is {self.complaint.get_current_state_display().lower()}, so it "
-                "cannot be marked to an officer here. Use the review or portal steps instead.",
+                "cannot be marked to an officer here. Use the portal steps instead.",
             )
         return cleaned
 

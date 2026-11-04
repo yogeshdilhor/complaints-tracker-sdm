@@ -63,7 +63,7 @@
         {% if can_change_marking %}
         <li><button type="button" hx-get="{% url 'complaints:action' complaint.pk 'change_marking' %}" hx-target="#action-area"
                     onclick="this.closest('details').open=false">Change department / officer
-            <small>Mark it to someone else, or send a reminder</small>
+            <small>Mark it to someone else, e.g. when a reply says it is not theirs</small>
           </button></li>
         {% endif %}
         {% if can_edit_stage and has_deletable_stages %}
